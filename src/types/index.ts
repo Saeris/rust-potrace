@@ -1,0 +1,8 @@
+export { Bitmap } from "./Bitmap"
+export { Curve } from "./Curve"
+export { Histogram } from "./Histogram"
+export { Opti } from "./Opti"
+export { Path } from "./Path"
+export { Point } from "./Point"
+export { Quad } from "./Quad"
+export { Sum } from "./Sum"

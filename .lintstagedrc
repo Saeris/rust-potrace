@@ -1,0 +1,7 @@
+{
+  "{lambda,src}/**/*.{ts}": [
+    "eslint --fix",
+    "tsc --no-emit",
+    "prettier --write"
+  ]
+}

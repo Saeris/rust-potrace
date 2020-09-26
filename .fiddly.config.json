@@ -1,0 +1,9 @@
+{
+  "name": "🖋️ Rust Potrace",
+  "description": "A Rust/WASM port of Potrace",
+  "noHeader": true,
+  "homepage:": "http://rust-potrace.saeris.io",
+  "repo": "https://github.com/saeris/rust-potrace",
+  "favicon": "static/favicon.ico",
+  "styles": "styles/styles.css"
+}
