@@ -1,45 +1,97 @@
-import {
-  bezier,
-  cprod,
-  ddenom,
-  ddist,
-  dpara,
-  fixed,
-  interval,
-  iprod,
-  iprod1,
-  mod,
-  sign,
-  tangent
-} from "../utils"
+import { fixed, mod, range } from "../utils"
 import { Opti } from "./Opti"
-import { Point } from "./Point"
+import {
+  Point,
+  ddenom,
+  dpara,
+  distanceBetween,
+  interval,
+  cubicCrossProduct,
+  cubicInnerProduct,
+  quadraticInnerProduct
+} from "./Point"
+
+/** return a point on a 1-dimensional Bezier segment */
+const bezier = (
+  t: number,
+  p0: Point,
+  p1: Point,
+  p2: Point,
+  p3: Point
+): Point => {
+  const s = 1 - t
+  return new Point(
+    s ** 3 * p0.x +
+      3 * (s ** 2 * t) * p1.x +
+      3 * (t ** 2 * s) * p2.x +
+      t ** 3 * p3.x,
+    s ** 3 * p0.y +
+      3 * (s ** 2 * t) * p1.y +
+      3 * (t ** 2 * s) * p2.y +
+      t ** 3 * p3.y
+  )
+}
+
+/* calculate the point t in [0..1] on the (convex) bezier curve
+   (p0,p1,p2,p3) which is tangent to q1-q0. Return -1.0 if there is no
+   solution in [0..1]. */
+const tangent = (
+  p0: Point,
+  p1: Point,
+  p2: Point,
+  p3: Point,
+  q0: Point,
+  q1: Point
+): number => {
+  const A = cubicCrossProduct(p0, p1, q0, q1)
+  const B = cubicCrossProduct(p1, p2, q0, q1)
+  const C = cubicCrossProduct(p2, p3, q0, q1)
+  const a = A - 2 * B + C
+  const b = -2 * A + 2 * B
+  const c = A
+  const d = b * b - 4 * a * c
+
+  if (a === 0 || d < 0) {
+    return -1.0
+  }
+
+  const s = Math.sqrt(d)
+  const r1 = (-b + s) / (2 * a)
+  const r2 = (-b - s) / (2 * a)
+
+  if (r1 >= 0 && r1 <= 1) {
+    return r1
+  } else if (r2 >= 0 && r2 <= 1) {
+    return r2
+  }
+  return -1.0
+}
 
 export class Curve {
   /** @type Represents the number of Segments in the Curve */
-  n: number
+  segments: number
   /** @type  */
   tag: ("CORNER" | "CURVE")[]
-  c: Point[]
+  controlPoints: Point[]
   alphaCurve: number = 0
   vertex: Point[]
   alpha: number[]
   alpha0: number[]
   beta: number[]
 
-  constructor(n: number) {
-    this.n = n
-    this.tag = new Array(n)
-    this.c = new Array(n * 3)
-    this.vertex = new Array(n)
-    this.alpha = new Array(n)
-    this.alpha0 = new Array(n)
-    this.beta = new Array(n)
+  constructor(segments: number) {
+    this.segments = segments
+    this.tag = new Array(segments)
+    this.controlPoints = new Array(segments * 3)
+    this.vertex = new Array(segments)
+    this.alpha = new Array(segments)
+    this.alpha0 = new Array(segments)
+    this.beta = new Array(segments)
   }
 
   reverse = () => {
-    const { n, vertex } = this
-    let y = n - 1
+    const { segments, vertex } = this
+    let y = segments - 1
     for (let x = 0; x < y; x++) {
       let tmp = vertex[x]
       vertex[x] = vertex[y]
@@ -50,11 +102,12 @@ export class Curve {
   }
 
   smooth = (alphaMax: number) => {
-    let { alpha, alpha0, beta, c, n, tag, vertex } = this
+    let { alpha, alpha0, beta, controlPoints, segments, tag, vertex } = this
 
-    for (let i = 0; i < n; i++) {
-      const j = mod(i + 1, n)
-      const k = mod(i + 2, n)
+    /* examine each vertex and find its best fit */
+    for (let i of range(0, segments)) {
+      const j = mod(i + 1, segments)
+      const k = mod(i + 2, segments)
       let denom = ddenom(vertex[i], vertex[k])
       let newAlpha = 0
       if (denom === 0.0) {
@@ -64,23 +117,32 @@ export class Curve {
         newAlpha = dd > 1 ? 1 - 1.0 / dd : 0
         newAlpha /= 0.75
       }
-      alpha0[j] = newAlpha
+      alpha0[j] = newAlpha /* remember "original" value of alpha */
       tag[j] = newAlpha >= alphaMax ? `CORNER` : `CURVE`
       const p4 = interval(1 / 2.0, vertex[k], vertex[j])
       if (newAlpha >= alphaMax) {
-        c[3 * j + 1] = vertex[j]
-        c[3 * j + 2] = p4
+        /* pointed corner */
+        controlPoints[3 * j + 1] = vertex[j]
+        controlPoints[3 * j + 2] = p4
       } else {
         if (newAlpha < 0.55) {
           newAlpha = 0.55
         } else if (newAlpha > 1) {
           newAlpha = 1
         }
-        c[3 * j + 0] = interval(0.5 + 0.5 * newAlpha, vertex[i], vertex[j])
-        c[3 * j + 1] = interval(0.5 + 0.5 * newAlpha, vertex[k], vertex[j])
-        c[3 * j + 2] = p4
+        controlPoints[3 * j + 0] = interval(
+          0.5 + 0.5 * newAlpha,
+          vertex[i],
+          vertex[j]
+        )
+        controlPoints[3 * j + 1] = interval(
+          0.5 + 0.5 * newAlpha,
+          vertex[k],
+          vertex[j]
+        )
+        controlPoints[3 * j + 2] = p4
       }
-      alpha[j] = newAlpha
+      alpha[j] = newAlpha /* store the "cropped" value of alpha */
       beta[j] = 0.5
     }
     this.alphaCurve = 1
@@ -88,118 +150,137 @@ export class Curve {
     return this
   }
 
-  optiCurve = (optTolerance: number) => {
-    let m = this.n
+  optimize = (tolerance: number) => {
+    let segments = this.segments
     let vert = this.vertex
-    let pt = new Array(m + 1)
-    let pen = new Array(m + 1)
-    let len = new Array(m + 1)
-    let opt = new Array(m + 1)
-    let i
-    let j
-    let r
-    let o = new Opti()
-    let p0
-    let idx
-    let area
-    let alpha
 
-    let convc = new Array(m)
-    let areac = new Array(m + 1)
-
-    for (i = 0; i < m; i++) {
+    let convexities = new Array(segments)
+    /* pre-calculate convexity: +1 = right turn, -1 = left turn, 0 = corner */
+    for (let i of range(0, segments)) {
       if (this.tag[i] === `CURVE`) {
-        convc[i] = sign(
-          dpara(vert[mod(i - 1, m)], vert[i], vert[mod(i + 1, m)])
+        convexities[i] = Math.sign(
+          dpara(vert[mod(i - 1, segments)], vert[i], vert[mod(i + 1, segments)])
         )
       } else {
-        convc[i] = 0
+        convexities[i] = 0
       }
     }
 
-    area = 0.0
-    areac[0] = 0.0
-    p0 = this.vertex[0]
-    for (i = 0; i < m; i++) {
-      idx = mod(i + 1, m)
+    /* pre-calculate areas */
+    let area = 0.0
+    let areaCache = new Array(segments + 1)
+    areaCache[0] = 0.0
+    for (let seg of range(0, segments)) {
+      let idx = mod(seg + 1, segments)
       if (this.tag[idx] === `CURVE`) {
-        alpha = this.alpha[idx]
+        let alpha = this.alpha[idx]
         area +=
           (0.3 *
             alpha *
             (4 - alpha) *
-            dpara(this.c[i * 3 + 2], vert[idx], this.c[idx * 3 + 2])) /
+            dpara(
+              this.controlPoints[seg * 3 + 2],
+              vert[idx],
+              this.controlPoints[idx * 3 + 2]
+            )) /
           2
-        area += dpara(p0, this.c[i * 3 + 2], this.c[idx * 3 + 2]) / 2
+        area +=
+          dpara(
+            this.vertex[0], // origin
+            this.controlPoints[seg * 3 + 2],
+            this.controlPoints[idx * 3 + 2]
+          ) / 2
       }
-      areac[i + 1] = area
+      areaCache[seg + 1] = area
     }
 
+    let pt = new Array(segments + 1)
     pt[0] = -1
+    let pen = new Array(segments + 1)
     pen[0] = 0
+    let len = new Array(segments + 1)
     len[0] = 0
+    let optimizationResult = new Opti()
+    let opt = new Array(segments + 1)
 
-    for (j = 1; j <= m; j++) {
-      pt[j] = j - 1
-      pen[j] = pen[j - 1]
-      len[j] = len[j - 1] + 1
+    /* calculate best path from 0 to j */
+    for (let seg of range(1, segments + 1)) {
+      pt[seg] = seg - 1
+      pen[seg] = pen[seg - 1]
+      len[seg] = len[seg - 1] + 1
 
-      for (i = j - 2; i >= 0; i--) {
-        r = this.optiPenalty(i, mod(j, m), o, optTolerance, convc, areac)
-        if (r) {
+      for (let i of range(0, seg - 1)) {
+        if (
+          this.getPenalty(
+            i,
+            mod(seg, segments),
+            optimizationResult,
+            tolerance,
+            convexities,
+            areaCache
+          )
+        ) {
           break
         }
         if (
-          len[j] > len[i] + 1 ||
-          (len[j] === len[i] + 1 && pen[j] > pen[i] + o.pen)
+          len[seg] > len[i] + 1 ||
+          (len[seg] === len[i] + 1 &&
+            pen[seg] > pen[i] + optimizationResult.penalty)
         ) {
-          pt[j] = i
-          pen[j] = pen[i] + o.pen
-          len[j] = len[i] + 1
-          opt[j] = o
-          o = new Opti()
+          pt[seg] = i
+          pen[seg] = pen[i] + optimizationResult.penalty
+          len[seg] = len[i] + 1
+          opt[seg] = optimizationResult
+          optimizationResult = new Opti()
         }
       }
     }
-    let om = len[m]
-    let ocurve = new Curve(om)
-    let s = new Array(om)
-    let t = new Array(om)
-
-    j = m
-    for (i = om - 1; i >= 0; i--) {
-      if (pt[j] === j - 1) {
-        ocurve.tag[i] = this.tag[mod(j, m)]
-        ocurve.c[i * 3 + 0] = this.c[mod(j, m) * 3 + 0]
-        ocurve.c[i * 3 + 1] = this.c[mod(j, m) * 3 + 1]
-        ocurve.c[i * 3 + 2] = this.c[mod(j, m) * 3 + 2]
-        ocurve.vertex[i] = this.vertex[mod(j, m)]
-        ocurve.alpha[i] = this.alpha[mod(j, m)]
-        ocurve.alpha0[i] = this.alpha0[mod(j, m)]
-        ocurve.beta[i] = this.beta[mod(j, m)]
-        s[i] = 1.0
-        t[i] = 1.0
+    let optimalNumSegments = len[segments]
+    let ocurve = new Curve(optimalNumSegments)
+    let s = new Array(optimalNumSegments)
+    let t = new Array(optimalNumSegments)
+    let seg = segments
+    for (let optSeg of range(0, optimalNumSegments, -1)) {
+      if (pt[seg] === seg - 1) {
+        ocurve.tag[optSeg] = this.tag[mod(seg, segments)]
+        ocurve.controlPoints[optSeg * 3 + 0] = this.controlPoints[
+          mod(seg, segments) * 3 + 0
+        ]
+        ocurve.controlPoints[optSeg * 3 + 1] = this.controlPoints[
+          mod(seg, segments) * 3 + 1
+        ]
+        ocurve.controlPoints[optSeg * 3 + 2] = this.controlPoints[
+          mod(seg, segments) * 3 + 2
+        ]
+        ocurve.vertex[optSeg] = this.vertex[mod(seg, segments)]
+        ocurve.alpha[optSeg] = this.alpha[mod(seg, segments)]
+        ocurve.alpha0[optSeg] = this.alpha0[mod(seg, segments)]
+        ocurve.beta[optSeg] = this.beta[mod(seg, segments)]
+        s[optSeg] = 1
+        t[optSeg] = 1
       } else {
-        ocurve.tag[i] = `CURVE`
-        ocurve.c[i * 3 + 0] = opt[j].c[0]
-        ocurve.c[i * 3 + 1] = opt[j].c[1]
-        ocurve.c[i * 3 + 2] = this.c[mod(j, m) * 3 + 2]
-        ocurve.vertex[i] = interval(
-          opt[j].s,
-          this.c[mod(j, m) * 3 + 2],
-          vert[mod(j, m)]
+        ocurve.tag[optSeg] = `CURVE`
+        ocurve.controlPoints[optSeg * 3 + 0] = opt[seg].c[0]
+        ocurve.controlPoints[optSeg * 3 + 1] = opt[seg].c[1]
+        ocurve.controlPoints[optSeg * 3 + 2] = this.controlPoints[
+          mod(seg, segments) * 3 + 2
+        ]
+        ocurve.vertex[optSeg] = interval(
+          opt[seg].s,
+          this.controlPoints[mod(seg, segments) * 3 + 2],
+          vert[mod(seg, segments)]
         )
-        ocurve.alpha[i] = opt[j].alpha
-        ocurve.alpha0[i] = opt[j].alpha
-        s[i] = opt[j].s
-        t[i] = opt[j].t
+        ocurve.alpha[optSeg] = opt[seg].alpha
+        ocurve.alpha0[optSeg] = opt[seg].alpha
+        s[optSeg] = opt[seg].s
+        t[optSeg] = opt[seg].t
       }
-      j = pt[j]
+      seg = pt[seg]
     }
 
-    for (i = 0; i < om; i++) {
-      idx = mod(i + 1, om)
-      ocurve.beta[i] = s[i] / (s[i] + t[idx])
+    /* calculate beta parameters */
+    for (let i of range(0, optimalNumSegments)) {
+      ocurve.beta[i] = s[i] / (s[i] + t[mod(i + 1, optimalNumSegments)])
     }
 
     ocurve.alphaCurve = 1
@@ -208,194 +289,210 @@ export class Curve {
     return this
   }
 
-  optiPenalty = (
+  getPenalty = (
     i: number,
     j: number,
-    res: Opti,
-    opttolerance: number,
-    convc: number[],
-    areac: number[]
+    optimizationResult: Opti,
+    tolerance: number,
+    convexities: number[],
+    areaCache: number[]
   ) => {
-    const { n: m, vertex } = this
-    let k
-    let k1
-    let k2
-    let conv
-    let i1
-    let area
-    let alpha
-    let d
-    let d1
-    let d2
-    let p0
-    let p1
-    let p2
-    let p3
-    let pt
-    let A
-    let R
-    let A1
-    let A2
-    let A3
-    let A4
-    let s
-    let t
+    const { segments, vertex } = this
+    /* check convexity, corner-freeness, and maximum bend < 179 degrees */
+    if (i === j) return 1 /* sanity - a full loop can never be an opticurve */
 
-    if (i === j) return 1
-
-    k = i
-    i1 = mod(i + 1, m)
-    k1 = mod(k + 1, m)
-    conv = convc[k1]
-    if (conv === 0) {
+    let k = i
+    const idx = mod(i + 1, segments)
+    let k1 = mod(k + 1, segments)
+    const convexity = convexities[k1]
+    if (convexity === 0) {
       return 1
     }
-    d = ddist(vertex[i], vertex[i1])
-    for (k = k1; k !== j; k = k1) {
-      k1 = mod(k + 1, m)
-      k2 = mod(k + 2, m)
-      if (convc[k1] !== conv) {
-        return 1
-      }
-      if (sign(cprod(vertex[i], vertex[i1], vertex[k1], vertex[k2])) !== conv) {
+    k = k1
+    while (k !== j) {
+      k1 = mod(k + 1, segments)
+      let k2 = mod(k + 2, segments)
+      let distance = distanceBetween(vertex[i], vertex[idx])
+      if (convexities[k1] !== convexity) {
         return 1
       }
       if (
-        iprod1(vertex[i], vertex[i1], vertex[k1], vertex[k2]) <
-        d * ddist(vertex[k1], vertex[k2]) * -0.999847695156
+        Math.sign(
+          cubicCrossProduct(vertex[i], vertex[idx], vertex[k1], vertex[k2])
+        ) !== convexity
       ) {
         return 1
       }
+      if (
+        cubicInnerProduct(vertex[i], vertex[idx], vertex[k1], vertex[k2]) <
+        distance * distanceBetween(vertex[k1], vertex[k2]) * -0.999847695156
+      ) {
+        return 1
+      }
+      k = k1
     }
-
-    p0 = this.c[mod(i, m) * 3 + 2].copy()
-    p1 = vertex[mod(i + 1, m)].copy()
-    p2 = vertex[mod(j, m)].copy()
-    p3 = this.c[mod(j, m) * 3 + 2].copy()
-
-    area = areac[j] - areac[i]
-    area -= dpara(vertex[0], this.c[i * 3 + 2], this.c[j * 3 + 2]) / 2
+    /* the curve we're working in: */
+    const p0 = this.controlPoints[mod(i, segments) * 3 + 2].copy()
+    let p1 = vertex[mod(i + 1, segments)].copy()
+    let p2 = vertex[mod(j, segments)].copy()
+    const p3 = this.controlPoints[mod(j, segments) * 3 + 2].copy()
+    /* determine its area */
+    let area = areaCache[j] - areaCache[i]
+    area -=
+      dpara(
+        vertex[0],
+        this.controlPoints[i * 3 + 2],
+        this.controlPoints[j * 3 + 2]
+      ) / 2
     if (i >= j) {
-      area += areac[m]
+      area += areaCache[segments]
     }
-
-    A1 = dpara(p0, p1, p2)
-    A2 = dpara(p0, p1, p3)
-    A3 = dpara(p0, p2, p3)
-
-    A4 = A1 + A3 - A2
+    /* find intersection o of p0p1 and p2p3. Let t,s such that o =
+      interval(t,p0,p1) = interval(s,p3,p2). Let A be the area of the
+      triangle (p0,o,p3). */
+    const A1 = dpara(p0, p1, p2)
+    const A2 = dpara(p0, p1, p3)
+    const A3 = dpara(p0, p2, p3)
+    const A4 = A1 + A3 - A2
 
     if (A2 === A1) {
+      /* this should never happen */
       return 1
     }
 
-    t = A3 / (A3 - A4)
-    s = A2 / (A2 - A1)
-    A = (A2 * t) / 2.0
+    let t = A3 / (A3 - A4)
+    const s = A2 / (A2 - A1)
+    const A = (A2 * t) / 2.0
 
     if (A === 0.0) {
+      /* this should never happen */
       return 1
     }
 
-    R = area / A
-    alpha = 2 - Math.sqrt(4 - R / 0.3)
+    const relativeArea = area / A /* relative area */
+    const alpha =
+      2 -
+      Math.sqrt(4 - relativeArea / 0.3) /* overall alpha for p0-o-p3 curve */
 
-    res.c[0] = interval(t * alpha, p0, p1)
-    res.c[1] = interval(s * alpha, p3, p2)
-    res.alpha = alpha
-    res.t = t
-    res.s = s
+    optimizationResult.c[0] = interval(t * alpha, p0, p1)
+    optimizationResult.c[1] = interval(s * alpha, p3, p2)
+    optimizationResult.alpha = alpha
+    optimizationResult.t = t
+    optimizationResult.s = s
 
-    p1 = res.c[0].copy()
-    p2 = res.c[1].copy()
+    p1 = optimizationResult.c[0].copy()
+    p2 = optimizationResult.c[1].copy() /* the proposed curve is now (p0,p1,p2,p3) */
 
-    res.pen = 0
-
-    for (k = mod(i + 1, m); k !== j; k = k1) {
-      k1 = mod(k + 1, m)
+    optimizationResult.penalty = 0
+    /* calculate penalty */
+    /* check tangency with edges */
+    for (k = mod(i + 1, segments); k !== j; k = k1) {
+      k1 = mod(k + 1, segments)
       t = tangent(p0, p1, p2, p3, vertex[k], vertex[k1])
       if (t < -0.5) {
         return 1
       }
-      pt = bezier(t, p0, p1, p2, p3)
-      d = ddist(vertex[k], vertex[k1])
-      if (d === 0.0) {
+      let pt = bezier(t, p0, p1, p2, p3)
+      let distance = distanceBetween(vertex[k], vertex[k1])
+      if (distance === 0.0) {
+        /* this should never happen */
         return 1
       }
-      d1 = dpara(vertex[k], vertex[k1], pt) / d
-      if (Math.abs(d1) > opttolerance) {
+      const d1 = dpara(vertex[k], vertex[k1], pt) / distance
+      if (Math.abs(d1) > tolerance) {
         return 1
       }
       if (
-        iprod(vertex[k], vertex[k1], pt) < 0 ||
-        iprod(vertex[k1], vertex[k], pt) < 0
+        quadraticInnerProduct(vertex[k], vertex[k1], pt) < 0 ||
+        quadraticInnerProduct(vertex[k1], vertex[k], pt) < 0
       ) {
         return 1
       }
-      res.pen += d1 * d1
+      optimizationResult.penalty += d1 * d1
     }
-
+    /* check corners */
     for (k = i; k !== j; k = k1) {
-      k1 = mod(k + 1, m)
-      t = tangent(p0, p1, p2, p3, this.c[k * 3 + 2], this.c[k1 * 3 + 2])
+      k1 = mod(k + 1, segments)
+      t = tangent(
+        p0,
+        p1,
+        p2,
+        p3,
+        this.controlPoints[k * 3 + 2],
+        this.controlPoints[k1 * 3 + 2]
+      )
       if (t < -0.5) {
         return 1
       }
-      pt = bezier(t, p0, p1, p2, p3)
-      d = ddist(this.c[k * 3 + 2], this.c[k1 * 3 + 2])
-      if (d === 0.0) {
+      let pt = bezier(t, p0, p1, p2, p3)
+      let distance = distanceBetween(
+        this.controlPoints[k * 3 + 2],
+        this.controlPoints[k1 * 3 + 2]
+      )
+      if (distance === 0.0) {
+        /* this should never happen */
         return 1
       }
-      d1 = dpara(this.c[k * 3 + 2], this.c[k1 * 3 + 2], pt) / d
-      d2 = dpara(this.c[k * 3 + 2], this.c[k1 * 3 + 2], vertex[k1]) / d
+      let d1 =
+        dpara(
+          this.controlPoints[k * 3 + 2],
+          this.controlPoints[k1 * 3 + 2],
+          pt
+        ) / distance
+      let d2 =
+        dpara(
+          this.controlPoints[k * 3 + 2],
+          this.controlPoints[k1 * 3 + 2],
+          vertex[k1]
+        ) / distance
       d2 *= 0.75 * this.alpha[k1]
       if (d2 < 0) {
         d1 = -d1
         d2 = -d2
       }
-      if (d1 < d2 - opttolerance) {
+      if (d1 < d2 - tolerance) {
         return 1
       }
       if (d1 < d2) {
-        res.pen += (d1 - d2) * (d1 - d2)
+        optimizationResult.penalty += (d1 - d2) * (d1 - d2)
       }
     }
 
     return 0
   }
 
-  renderCurve = ({ x: width, y: height }: { x: number; y: number } = { x: 1, y: 1 }): string => {
-    const origin = this.c[(this.n - 1) * 3 + 2]
-    return this.tag
-      .reduce(
-        (path, tag, i) => {
-          const i3 = i * 3
-          const p0 = this.c[i3]
-          const p1 = this.c[i3 + 1]
-          const p2 = this.c[i3 + 2]
-          if (tag === `CURVE`) {
-            path.push(
-              `C ${fixed(p0.x * width)} ${fixed(p0.y * height)}, ${fixed(
-                p1.x * width
-              )} ${fixed(p1.y * height)}, ${fixed(p2.x * width)} ${fixed(
-                p2.y * height
-              )}`
-            )
-          } else if (tag === `CORNER`) {
-            path.push(
-              `L ${fixed(p1.x * width)} ${fixed(p1.y * height)} ${fixed(
-                p2.x * width
-              )} ${fixed(p2.y * height)}`
-            )
-          }
-          return path
-        },
-        [
-          `M ${fixed(origin.x * width)} ${fixed(
-            origin.y * height
-          )}`
+  render = (
+    { width, height }: { width: number; height: number } = {
+      width: 1,
+      height: 1
+    }
+  ): string => {
+    const origin = this.controlPoints[(this.segments - 1) * 3 + 2]
+    return this.tag.reduce((path, tag, i) => {
+      const i3 = i * 3
+      const p0 = this.controlPoints[i3]
+      const p1 = this.controlPoints[i3 + 1]
+      const p2 = this.controlPoints[i3 + 2]
+      if (tag === `CURVE`) {
+        const [p0x, p0y, p1x, p1y, p2x, p2y] = [
+          fixed(p0.x * width),
+          fixed(p0.y * height),
+          fixed(p1.x * width),
+          fixed(p1.y * height),
+          fixed(p2.x * width),
+          fixed(p2.y * height)
         ]
-      )
-      .join(` `)
+        return `${path} C ${p0x} ${p0y}, ${p1x} ${p1y}, ${p2x} ${p2y}`
+      } else if (tag === `CORNER`) {
+        const [p1x, p1y, p2x, p2y] = [
+          fixed(p1.x * width),
+          fixed(p1.y * height),
+          fixed(p2.x * width),
+          fixed(p2.y * height)
+        ]
+        return `${path} L ${p1x} ${p1y} ${p2x} ${p2y}`
+      }
+      return path
+    }, `M ${fixed(origin.x * width)} ${fixed(origin.y * height)}`)
   }
 }

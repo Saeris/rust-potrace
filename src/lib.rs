@@ -1,6 +1,8 @@
 extern crate base64;
+extern crate cached;
 extern crate image;
 extern crate num;
+extern crate regex;
 
 pub mod constants;
 

@@ -1,22 +1,32 @@
 import { cloneDeepWith, isNumber, isInteger } from "lodash"
 import { read } from "jimp"
-import { Histogram } from "../types/Histogram"
+import { Bitmap } from "../types/Bitmap"
 import { PATH_TO_LENNA, blackImage, whiteImage } from "./sources"
 
 describe(`Histogram class (private, responsible for auto thresholding)`, () => {
   let histogram = null
-  let blackHistogram = new Histogram(blackImage, Histogram.MODE_LUMINANCE)
-  let whiteHistogram = new Histogram(whiteImage, Histogram.MODE_LUMINANCE)
+  const blackHistogram = new Bitmap(
+    blackImage.bitmap.width,
+    blackImage.bitmap.height,
+    blackImage.bitmap.data
+  ).histogram
+  const whiteHistogram = new Bitmap(
+    whiteImage.bitmap.width,
+    whiteImage.bitmap.height,
+    whiteImage.bitmap.data
+  ).histogram
 
   beforeAll(async done => {
     try {
-      const img = await read(PATH_TO_LENNA)
-      histogram = new Histogram(img, Histogram.MODE_LUMINANCE)
+      const {
+        bitmap: { width, height, data }
+      } = await read(PATH_TO_LENNA)
+      histogram = new Bitmap(width, height, data).histogram
       done()
     } catch (err) {
       if (err) throw err
     }
-  }, 10000)
+  })
 
   describe(`#getDominantColor`, () => {
     it(`gives different results with different tolerance values`, () => {

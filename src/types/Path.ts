@@ -1,28 +1,30 @@
-import { cyclic, mod, quadform, sign, xprod } from "../utils"
+// @ts-ignore
+import assert from "assert" // eslint-disable-line
+import { cyclic, mod, range } from "../utils"
 import { Curve } from "./Curve"
-import { Point } from "./Point"
+import { Point, crossProduct } from "./Point"
 import { Quad } from "./Quad"
 import { Sum } from "./Sum"
 
 export class Path {
   area: number = 0
   len: number = 0
-  pt: Point[] = []
+  verticies: Point[] = []
   minX: number = 100000
   minY: number = 100000
   maxX: number = -1
   maxY: number = -1
   /** length of optimal polygon */
-  m?: number
+  optimalNumSegments?: number
   /** po[m]: optimal polygon */
   po?: number[]
   /** lon[len]: (i,lon[i]) = longest straight line from i */
   lon?: number[]
   curve?: Curve
   /** Origin x coordinate */
-  x0?: number
+  originX?: number
   /** Origin y coordinate */
-  y0?: number
+  originY?: number
   x1?: number
   y1?: number
   /** sums[len+1]: cache for fast summing */
@@ -30,110 +32,149 @@ export class Path {
   sign?: string
 
   calcSums = () => {
-    this.x0 = this.pt[0].x
-    this.y0 = this.pt[0].y
-    this.sums = []
-    this.sums.push(new Sum(0, 0, 0, 0, 0))
-    for (let i = 0; i < this.len; i++) {
-      const x = this.pt[i].x - this.x0!
-      const y = this.pt[i].y - this.y0!
-      this.sums.push(
-        new Sum(
-          this.sums[i].x + x,
-          this.sums[i].y + y,
-          this.sums[i].xy + x * y,
-          this.sums[i].x2 + x * x,
-          this.sums[i].y2 + y * y
-        )
+    this.originX = this.verticies[0].x
+    this.originY = this.verticies[0].y
+    this.sums = new Array(this.len + 1)
+    this.sums[0] = new Sum(0, 0, 0, 0, 0)
+    for (const i of range(0, this.len)) {
+      const x = this.verticies[i].x - this.originX!
+      const y = this.verticies[i].y - this.originY!
+      this.sums[i + 1] = new Sum(
+        this.sums[i].x + x,
+        this.sums[i].y + y,
+        this.sums[i].xy + x * y,
+        this.sums[i].x2 + x * x,
+        this.sums[i].y2 + y * y
       )
     }
+
     return this
   }
 
+  // find the longest straight segment of the given path
   calcLon = () => {
-    const n = this.len
-    this.lon = new Array(n)
-    const pt = this.pt
-    const pivk = new Array(n)
-    const nc = new Array(n)
-    let cur = new Point()
-    let off = new Point()
-    let dk = new Point()
-    let foundk = 0
-    let j = 0
-    let k = 0
-    for (let i = n - 1; i >= 0; i--) {
-      if (pt[i].x !== pt[k].x && pt[i].y !== pt[k].y) {
-        k = i + 1
+    const segments = this.len
+    this.lon = new Array(segments)
+    const verticies = this.verticies
+    const nextCorner: number[] = new Array(segments) /* nc[n]: next corner */
+
+    /**
+     * initialize the nc data structure. Point from each point to the
+     * furthest future point to which it is connected by a vertical or
+     * horizontal segment. We take advantage of the fact that there is
+     * always a direction change at 0 (due to the path decomposition
+     * algorithm). But even if this were not so, there is no harm, as
+     * in practice, correctness does not depend on the word "furthest"
+     * above.
+     */
+    let idx = 0
+    for (const seg of range(0, segments, -1)) {
+      if (
+        verticies[seg].x !== verticies[idx].x &&
+        verticies[seg].y !== verticies[idx].y
+      ) {
+        idx = seg + 1
       }
-      nc[i] = k
+      nextCorner[seg] = idx
     }
 
-    for (let i = n - 1; i >= 0; i--) {
+    /**
+     * determine pivot points: for each i, let pivk[i] be the furthest k
+     * such that all j with i<j<k lie on a line connecting i,k.
+     */
+    const pivk: number[] = new Array(segments)
+    let j = 0
+    for (const seg of range(0, segments, -1)) {
       const ct = [0, 0, 0, 0]
       let dir =
         (3 +
-          3 * (pt[mod(i + 1, n)].x - pt[i].x) +
-          (pt[mod(i + 1, n)].y - pt[i].y)) /
+          3 * (verticies[mod(seg + 1, segments)].x - verticies[seg].x) +
+          (verticies[mod(seg + 1, segments)].y - verticies[seg].y)) /
         2
-      ct[dir]++
+      ct[dir] += 1
 
-      let [pointA, pointB] = [new Point(0, 0), new Point(0, 0)]
-
-      k = nc[i]
-      let k1 = i
+      let [constraintA, constraintB, cur, off] = [
+        new Point(),
+        new Point(),
+        new Point(),
+        new Point()
+      ]
+      /* find the next k such that no straight line from i to k */
+      let k = nextCorner[seg] //?
+      let cornerIdx = seg
+      let foundk = false
       let searching = true
       while (searching) {
-        foundk = 0
-        dir = (3 + 3 * sign(pt[k].x - pt[k1].x) + sign(pt[k].y - pt[k1].y)) / 2
-        ct[dir]++
-
+        dir =
+          (3 +
+            3 * Math.sign(verticies[k].x - verticies[cornerIdx].x) +
+            Math.sign(verticies[k].y - verticies[cornerIdx].y)) /
+          2
+        ct[dir] += 1
+        /* if all four "directions" have occurred, cut this path */
         if (ct[0] && ct[1] && ct[2] && ct[3]) {
-          pivk[i] = k1
-          foundk = 1
+          pivk[seg] = cornerIdx
+          foundk = true
           searching = false
         }
 
-        cur.x = pt[k].x - pt[i].x
-        cur.y = pt[k].y - pt[i].y
-
-        if (xprod(pointA, cur) < 0 || xprod(pointB, cur) > 0) {
+        cur.x = verticies[k].x - verticies[seg].x
+        cur.y = verticies[k].y - verticies[seg].y
+        /* see if current constraint is violated */
+        if (
+          crossProduct(constraintA, cur) < 0 ||
+          crossProduct(constraintB, cur) > 0
+        ) {
           searching = false
         }
-
+        /* else, update constraint */
         if (!(Math.abs(cur.x) <= 1 && Math.abs(cur.y) <= 1)) {
           off.x = cur.x + (cur.y >= 0 && (cur.y > 0 || cur.x < 0) ? 1 : -1)
           off.y = cur.y + (cur.x <= 0 && (cur.x < 0 || cur.y < 0) ? 1 : -1)
-          if (xprod(pointA, off) >= 0) {
-            pointA.x = off.x
-            pointA.y = off.y
+          if (crossProduct(constraintA, off) >= 0) {
+            constraintA.x = off.x
+            constraintA.y = off.y
           }
           off.x = cur.x + (cur.y <= 0 && (cur.y < 0 || cur.x < 0) ? 1 : -1)
           off.y = cur.y + (cur.x >= 0 && (cur.x > 0 || cur.y < 0) ? 1 : -1)
-          if (xprod(pointB, off) <= 0) {
-            pointB.x = off.x
-            pointB.y = off.y
+          if (crossProduct(constraintB, off) <= 0) {
+            constraintB.x = off.x
+            constraintB.y = off.y
           }
         }
-        k1 = k
-        k = nc[k1]
-        if (!cyclic(k, i, k1)) {
+        cornerIdx = k
+        k = nextCorner[cornerIdx]
+        if (!cyclic(k, seg, cornerIdx)) {
           searching = false
         }
       }
-      if (foundk === 0) {
-        dk.x = sign(pt[k].x - pt[k1].x)
-        dk.y = sign(pt[k].y - pt[k1].y)
-        cur.x = pt[k1].x - pt[i].x
-        cur.y = pt[k1].y - pt[i].y
-
+      /**
+       * corner was the last "corner" satisfying the current constraint, and
+       * k is the first one violating it. We now need to find the last
+       * point along corner..k which satisfied the constraint.
+       */
+      if (!foundk) {
+        const cornerDirection = new Point(
+          Math.sign(verticies[k].x - verticies[cornerIdx].x),
+          Math.sign(verticies[k].y - verticies[cornerIdx].y)
+        ) /* direction of k-corner */
+        cur.x = verticies[cornerIdx].x - verticies[seg].x
+        cur.y = verticies[cornerIdx].y - verticies[seg].y
+        /**
+         * find largest integer j such that xprod(constraint[0], cur+j*dk)
+         * >= 0 and xprod(constraint[1], cur+j*dk) <= 0. Use bilinearity
+         * of xprod.
+         */
         const [a, b, c, d] = [
-          xprod(pointA, cur),
-          xprod(pointA, dk),
-          xprod(pointB, cur),
-          xprod(pointB, dk)
+          crossProduct(constraintA, cur),
+          crossProduct(constraintA, cornerDirection),
+          crossProduct(constraintB, cur),
+          crossProduct(constraintB, cornerDirection)
         ]
-
+        /**
+         * find largest integer j such that a+j*b>=0 and c+j*d<=0. This
+         * can be solved with integer arithmetic.
+         */
         j = 10000000
 
         if (b < 0) {
@@ -143,20 +184,27 @@ export class Path {
           j = Math.min(j, Math.floor(-c / d))
         }
 
-        pivk[i] = mod(k1 + j, n)
+        pivk[seg] = mod(cornerIdx + j, segments)
       }
     }
-
-    j = pivk[n - 1]
-    this.lon[n - 1] = j
-    for (let i = n - 2; i >= 0; i--) {
+    /**
+     * clean up: for each i, let lon[i] be the largest k such that for
+     * all i' with i<=i'<k, i'<k<=pivk[i'].
+     */
+    j = pivk[segments - 1]
+    this.lon[segments - 1] = j
+    for (const i of range(0, segments - 2, -1)) {
       if (cyclic(i + 1, pivk[i], j)) {
         j = pivk[i]
       }
       this.lon[i] = j
     }
 
-    for (let i = n - 1; cyclic(mod(i + 1, n), j, this.lon[i]); i--) {
+    for (
+      let i = segments - 1;
+      cyclic(mod(i + 1, segments), j, this.lon[i]);
+      i--
+    ) {
       this.lon[i] = j
     }
 
@@ -164,49 +212,72 @@ export class Path {
   }
 
   bestPolygon = () => {
-    let n = this.len
-    let pen = new Array(n + 1)
-    let prev = new Array(n + 1)
-    let clip0 = new Array(n)
-    let clip1 = new Array(n + 1)
-    let seg0 = new Array(n + 1)
-    let seg1 = new Array(n + 1)
+    let segments = this.len
+    let pen = new Array(segments + 1) /* pen[n+1]: penalty vector */
+    let prev: number[] = new Array(
+      segments + 1
+    ) /* prev[n+1]: best path pointer vector */
+    let clip0 = new Array(
+      segments
+    ) /* clip0[n]: longest segment pointer, non-cyclic */
+    let clip1 = new Array(
+      segments + 1
+    ) /* clip1[n+1]: backwards segment pointer, non-cyclic */
+    let seg0 = new Array(
+      segments + 1
+    ) /* seg0[m+1]: forward segment bounds, m<=n */
+    let seg1 = new Array(
+      segments + 1
+    ) /* seg1[m+1]: backward segment bounds, m<=n */
 
-    for (let i = 0; i < n; i++) {
-      let c = mod(this.lon![mod(i - 1, n)] - 1, n)
+    /* calculate clipped paths */
+    for (const i of range(0, segments)) {
+      this.lon
+      let c = mod(this.lon![mod(i - 1, segments)] - 1, segments)
       if (c === i) {
-        c = mod(i + 1, n)
+        c = mod(i + 1, segments)
       }
       if (c < i) {
-        clip0[i] = n
+        clip0[i] = segments
       } else {
         clip0[i] = c
       }
     }
-
+    /**
+     * calculate backwards path clipping, non-cyclic. j <= clip0[i] iff
+     * clip1[j] <= i, for i,j=0..n.
+     */
     let j = 1
-    for (let i = 0; i < n; i++) {
+    for (const i of range(0, segments)) {
       while (j <= clip0[i]) {
         clip1[j] = i
         j++
       }
     }
 
+    /* calculate seg0[j] = longest path from 0 with j segments */
     let i = 0
-    for (j = 0; i < n; j++) {
+    for (j = 0; i < segments; j++) {
       seg0[j] = i
       i = clip0[i]
     }
-    seg0[j] = n
+    seg0[j] = segments
     let m = j
 
-    i = n
+    /* calculate seg1[j] = longest path to n with m-j segments */
+    i = segments
     for (j = m; j > 0; j--) {
       seg1[j] = i
       i = clip1[i]
     }
     seg1[0] = 0
 
+    /* now find the shortest path with m segments, based on penalty3 */
+    /**
+     * note: the outer 2 loops jointly have at most n iterations, thus
+     * the worst-case behavior here is quadratic. In practice, it is
+     * close to linear since the inner loop tends to be short.
+     */
     pen[0] = 0
     for (j = 1; j <= m; j++) {
       for (i = seg1[j]; i <= seg0[j]; i++) {
@@ -221,10 +292,12 @@ export class Path {
         pen[i] = best
       }
     }
-    this.m = m
+    this.optimalNumSegments = m
     this.po = new Array(m)
+    this.po
 
-    for (i = n, j = m - 1; i > 0; j--) {
+    /* read off shortest path */
+    for (i = segments, j = m - 1; i > 0; j--) {
       i = prev[i]
       this.po[j] = i
     }
@@ -233,34 +306,29 @@ export class Path {
   }
 
   penalty3 = (i: number, j: number) => {
-    const { len, pt, sums } = this as Required<Path>
-    let _j = j >= len ? j - len : j
-    let r = j >= len
-    const x =
-      r
-        ? sums[_j + 1].x - sums[i].x + sums[len].x
-        : sums[_j + 1].x - sums[i].x
-    const y =
-      r
-        ? sums[_j + 1].y - sums[i].y + sums[len].y
-        : sums[_j + 1].y - sums[i].y
-    const xy =
-      r
-        ? sums[_j + 1].xy - sums[i].xy + sums[len].xy
-        : sums[_j + 1].xy - sums[i].xy
-    const x2 =
-      r
-        ? sums[_j + 1].x2 - sums[i].x2 + sums[len].x2
-        : sums[_j + 1].x2 - sums[i].x2
-    const y2 =
-      r
-        ? sums[_j + 1].y2 - sums[i].y2 + sums[len].y2
-        : sums[_j + 1].y2 - sums[i].y2
+    const { len, verticies, sums } = this as Required<Path>
+    const _j = j >= len ? j - len : j
+    const r = j >= len
+    const x = r
+      ? sums[_j + 1].x - sums[i].x + sums[len].x
+      : sums[_j + 1].x - sums[i].x
+    const y = r
+      ? sums[_j + 1].y - sums[i].y + sums[len].y
+      : sums[_j + 1].y - sums[i].y
+    const xy = r
+      ? sums[_j + 1].xy - sums[i].xy + sums[len].xy
+      : sums[_j + 1].xy - sums[i].xy
+    const x2 = r
+      ? sums[_j + 1].x2 - sums[i].x2 + sums[len].x2
+      : sums[_j + 1].x2 - sums[i].x2
+    const y2 = r
+      ? sums[_j + 1].y2 - sums[i].y2 + sums[len].y2
+      : sums[_j + 1].y2 - sums[i].y2
     const k = r ? _j + 1 - i + len : _j + 1 - i
-    const px = (pt[i].x + pt[_j].x) / 2.0 - pt[0].x
-    const py = (pt[i].y + pt[_j].y) / 2.0 - pt[0].y
-    const ex = pt[_j].x - pt[i].x
-    const ey = -(pt[_j].y - pt[i].y)
+    const px = (verticies[i].x + verticies[_j].x) / 2.0 - verticies[0].x
+    const py = (verticies[i].y + verticies[_j].y) / 2.0 - verticies[0].y
+    const ex = verticies[_j].x - verticies[i].x
+    const ey = -(verticies[_j].y - verticies[i].y)
     const a = (x2 - 2 * x * px) / k + px * px
     const b = (xy - x * py - y * px) / k + px * py
     const c = (y2 - 2 * y * py) / k + py * py
@@ -268,140 +336,164 @@ export class Path {
   }
 
   adjustVertices = () => {
-    const { m, po, len, pt, x0, y0 } = this as Required<Path>
-    let ctr = new Array(m)
-    let dir = new Array(m)
-    let q = new Array(m)
-    let v = new Array(3)
+    const {
+      optimalNumSegments,
+      po,
+      len,
+      verticies,
+      originX,
+      originY
+    } = this as Required<Path>
+    let ctr: Point[] = new Array(optimalNumSegments).fill(new Point())
+    let dir: Point[] = new Array(optimalNumSegments).fill(new Point())
+    let quads: Quad[] = new Array(optimalNumSegments).fill(new Quad())
+    let vec: number[] = new Array(3)
     let s = new Point()
 
-    this.curve = new Curve(m)
-
-    for (let i = 0; i < m; i++) {
-      let j = po[mod(i + 1, m)]
-      j = mod(j - po[i], len) + po[i]
-      ctr[i] = new Point()
-      dir[i] = new Point()
-      this.pointslope(po[i], j, ctr[i], dir[i])
+    this.curve = new Curve(optimalNumSegments)
+    /* calculate "optimal" point-slope representation for each line segment */
+    for (let seg of range(optimalNumSegments)) {
+      this.pointslope(
+        po[seg],
+        mod(po[mod(seg + 1, optimalNumSegments)] - po[seg], len) + po[seg],
+        ctr[seg],
+        dir[seg]
+      )
     }
 
-    for (let i = 0; i < m; i++) {
-      q[i] = new Quad()
-      let d = dir[i].x * dir[i].x + dir[i].y * dir[i].y
-      if (d === 0.0) {
-        for (let j = 0; j < 3; j++) {
-          for (let k = 0; k < 3; k++) {
-            q[i].data[j * 3 + k] = 0
-          }
-        }
+    /**
+     * represent each line segment as a singular quadratic form; the distance of a point (x,y)
+     * from the line segment will be (x,y,1)Q(x,y,1)^t, where Q=q[i].
+     */
+    for (const seg of range(optimalNumSegments)) {
+      const distance = dir[seg].x ** 2 + dir[seg].y ** 2
+      if (distance === 0.0) {
+        Quad.scan((x, y) => {
+          quads[seg].set(x, y, 0)
+        })
       } else {
-        v[0] = dir[i].y
-        v[1] = -dir[i].x
-        v[2] = -v[1] * ctr[i].y - v[0] * ctr[i].x
-        for (let l = 0; l < 3; l++) {
-          for (let k = 0; k < 3; k++) {
-            q[i].data[l * 3 + k] = (v[l] * v[k]) / d
-          }
-        }
+        vec[0] = dir[seg].y
+        vec[1] = -dir[seg].x
+        vec[2] = -vec[1] * ctr[seg].y - vec[0] * ctr[seg].x
+        Quad.scan((x, y) => {
+          quads[seg].set(x, y, (vec[x] * vec[y]) / distance)
+        })
       }
     }
 
-    for (let i = 0; i < m; i++) {
-      const Q = new Quad()
+    /**
+     * now calculate the "intersections" of consecutive segments. Instead of using the actual
+     * intersection, we find the point within a given unit square which minimizes the square
+     * distance to the two lines.
+     */
+    for (const seg of range(optimalNumSegments)) {
+      const unitSq = new Quad()
       const w = new Point()
 
-      s.x = pt[po[i]].x - x0
-      s.y = pt[po[i]].y - y0
+      /* let s be the vertex, in coordinates relative to x0/y0 */
+      s.x = verticies[po[seg]].x - originX
+      s.y = verticies[po[seg]].y - originY
 
-      let j = mod(i - 1, m)
+      Quad.scan((x, y) => {
+        unitSq.set(
+          x,
+          y,
+          quads[mod(seg - 1, optimalNumSegments)].get(x, y) +
+            quads[seg].get(x, y)
+        )
+      })
 
-      for (let l = 0; l < 3; l++) {
-        for (let k = 0; k < 3; k++) {
-          Q.data[l * 3 + k] = q[j].at(l, k) + q[i].at(l, k)
-        }
-      }
-
+      /* minimize the quadratic form Q on the unit square */
+      /* find intersection */
       let searching = true
       while (searching) {
-        const det = Q.at(0, 0) * Q.at(1, 1) - Q.at(0, 1) * Q.at(1, 0)
+        const det = unitSq.prod(0, 0, 1, 1) - unitSq.prod(0, 1, 1, 0)
         if (det !== 0.0) {
-          w.x = (-Q.at(0, 2) * Q.at(1, 1) + Q.at(1, 2) * Q.at(0, 1)) / det
-          w.y = (Q.at(0, 2) * Q.at(1, 0) - Q.at(1, 2) * Q.at(0, 0)) / det
+          w.x =
+            (-unitSq.get(0, 2) * unitSq.get(1, 1) +
+              unitSq.get(1, 2) * unitSq.get(0, 1)) /
+            det
+          w.y = (unitSq.prod(0, 2, 1, 0) - unitSq.prod(1, 2, 0, 0)) / det
           searching = false
         }
 
-        if (Q.at(0, 0) > Q.at(1, 1)) {
-          v[0] = -Q.at(0, 1)
-          v[1] = Q.at(0, 0)
-        } else if (Q.at(1, 1)) {
-          v[0] = -Q.at(1, 1)
-          v[1] = Q.at(1, 0)
+        /* matrix is singular - lines are parallel. Add another, orthogonal axis, through the center of the unit square */
+        if (unitSq.get(0, 0) > unitSq.get(1, 1)) {
+          // upper-left > center
+          vec[0] = -unitSq.get(0, 1)
+          vec[1] = unitSq.get(0, 0)
+        } else if (unitSq.get(1, 1)) {
+          // center isn't 0
+          vec[0] = -unitSq.get(1, 1)
+          vec[1] = unitSq.get(1, 0)
         } else {
-          v[0] = 1
-          v[1] = 0
+          vec[0] = 1
+          vec[1] = 0
         }
-        let d = v[0] * v[0] + v[1] * v[1]
-        v[2] = -v[1] * s.y - v[0] * s.x
-        for (let l = 0; l < 3; l++) {
-          for (let k = 0; k < 3; k++) {
-            Q.data[l * 3 + k] += (v[l] * v[k]) / d
-          }
-        }
+        const distance = vec[0] ** 2 + vec[1] ** 2
+        vec[2] = -vec[1] * s.y - vec[0] * s.x
+        Quad.scan((x, y) => {
+          unitSq.set(x, y, unitSq.get(x, y) + (vec[x] * vec[y]) / distance)
+        })
       }
       let dx = Math.abs(w.x - s.x)
       let dy = Math.abs(w.y - s.y)
       if (dx <= 0.5 && dy <= 0.5) {
-        this.curve.vertex[i] = new Point(w.x + x0, w.y + y0)
+        this.curve.vertex[seg] = new Point(w.x + originX, w.y + originY)
         continue // eslint-disable-line
       }
 
-      let min = quadform(Q, s)
+      /* the minimum was not in the unit square; now minimize quadratic on boundary of square */
+      let min = unitSq.quadform(s)
       let xmin = s.x
-      let ymin = s.y
-      let cand = 0
+      let ymin = s.y /* coordinates of minimum */
+      let candidate = 0 /* minimum and candidate for minimum of quad. form */
 
-      if (Q.at(0, 0) !== 0.0) {
-        for (let z = 0; z < 2; z++) {
-          w.y = s.y - 0.5 + z
-          w.x = -(Q.at(0, 1) * w.y + Q.at(0, 2)) / Q.at(0, 0)
+      if (unitSq.get(0, 0) !== 0.0) {
+        // upper-left
+        for (const y of range(0, 2)) {
+          /* value of the y-coordinate */
+          w.y = s.y - 0.5 + y
+          w.x = -(unitSq.get(0, 1) * w.y + unitSq.get(0, 2)) / unitSq.get(0, 0)
           dx = Math.abs(w.x - s.x)
-          cand = quadform(Q, w)
-          if (dx <= 0.5 && cand < min) {
-            min = cand
+          candidate = unitSq.quadform(w)
+          if (dx <= 0.5 && candidate < min) {
+            min = candidate
             xmin = w.x
             ymin = w.y
           }
         }
       }
 
-      if (Q.at(1, 1) !== 0.0) {
-        for (let z = 0; z < 2; z++) {
-          w.x = s.x - 0.5 + z
-          w.y = -(Q.at(1, 0) * w.x + Q.at(1, 2)) / Q.at(1, 1)
+      if (unitSq.get(1, 1) !== 0.0) {
+        // center
+        for (const x of range(2)) {
+          /* value of the x-coordinate */
+          w.x = s.x - 0.5 + x
+          w.y = -(unitSq.get(1, 0) * w.x + unitSq.get(1, 2)) / unitSq.get(1, 1)
           dy = Math.abs(w.y - s.y)
-          cand = quadform(Q, w)
-          if (dy <= 0.5 && cand < min) {
-            min = cand
+          candidate = unitSq.quadform(w)
+          if (dy <= 0.5 && candidate < min) {
+            min = candidate
             xmin = w.x
             ymin = w.y
           }
         }
       }
 
-      for (let l = 0; l < 2; l++) {
-        for (let k = 0; k < 2; k++) {
-          w.x = s.x - 0.5 + l
-          w.y = s.y - 0.5 + k
-          cand = quadform(Q, w)
-          if (cand < min) {
-            min = cand
-            xmin = w.x
-            ymin = w.y
-          }
+      /* check four corners */
+      Quad.scan((x, y) => {
+        w.x = s.x - 0.5 + x
+        w.y = s.y - 0.5 + y
+        candidate = unitSq.quadform(w)
+        if (candidate < min) {
+          min = candidate
+          xmin = w.x
+          ymin = w.y
         }
-      }
+      }, 2)
 
-      this.curve.vertex[i] = new Point(xmin + x0, ymin + y0)
+      this.curve.vertex[seg] = new Point(xmin + originX, ymin + originY)
     }
 
     return this.curve
@@ -430,7 +522,6 @@ export class Path {
       _i += len
       r += 1
     }
-
     const x1 = sums[_j + 1].x - sums[_i].x + r * sums[len].x
     const y1 = sums[_j + 1].y - sums[_i].y + r * sums[len].y
     const x2 = sums[_j + 1].x2 - sums[_i].x2 + r * sums[len].x2

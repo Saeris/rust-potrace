@@ -1,91 +1,114 @@
 import { Histogram } from "./Histogram"
-import { Point } from "./Point"
-import { between } from "../utils"
 import { Path } from "./Path"
+import { Point } from "./Point"
+import { TURNPOLICIES } from "../Constants"
+import { range } from "../utils"
+
+const u32ToRGB = (u32: number): Uint8Array => {
+  const opacity = (u32 & 0xff) / 255
+  return new Uint8Array([
+    255 + (((u32 >> 24) & 0xff) - 255) * opacity,
+    255 + (((u32 >> 16) & 0xff) - 255) * opacity,
+    255 + (((u32 >> 8) & 0xff) - 255) * opacity
+  ])
+}
+
+const luminance = ([r, g, b]: Uint8Array): number =>
+  Math.round(0.2126 * r + 0.7153 * g + 0.0721 * b) // $(128, 165, 97)
 
 /**
  * Represents a bitmap where each pixel can be a number in range of 0..255
  * Used internally to store luminance data.
  */
 export class Bitmap {
-  #histogram: Histogram | null = null
+  histogram: Histogram
   width: number
   height: number
   size: number
-  arrayBuffer: ArrayBuffer
-  data: Uint8Array
+  data: Readonly<Buffer>
+  pixels: Uint32Array
+  lum: Uint8Array
 
-  constructor(w: number, h: number) {
-    this.width = w
-    this.height = h
-    this.size = w * h
-    this.arrayBuffer = new ArrayBuffer(this.size)
-    this.data = new Uint8Array(this.arrayBuffer)
+  constructor(width: number, height: number, raw: Readonly<Buffer>) {
+    this.width = width
+    this.height = height
+    this.size = width * height
+    this.data = raw
+    this.pixels = new Uint32Array(new ArrayBuffer(this.size))
+    this.lum = new Uint8Array(new ArrayBuffer(this.size)).map((_, i) => {
+      const [r, g, b, a] = raw.slice(i, i + 4)
+      const byte = r + g + b + a
+      this.pixels[i] = byte
+      return luminance(u32ToRGB(byte))
+    })
+    this.histogram = this.generateHistogram()
   }
 
+  generateHistogram = (): Histogram => new Histogram(this)
+
   /**
-   * Returns pixel value
-   *
-   * @param {Number|Point} x - index, point or x
-   * @param {Number} [y]
+   * Returns pixel value, for a thresholded image, this will either be 0 (black) or 1 (white)
    */
-  getValueAt = (x: number, y?: number) =>
-    this.data[
-      typeof x === `number` && typeof y !== `number`
-        ? x
-        : this.pointToIndex(x, y)
-    ]
+  getValueAt = (x: number, y: number) => this.lum[this.pointToIndex(x, y)]
 
   indexToPoint = (index: number): Point => {
-    const isBetween = between(index, 0, this.size)
-    const y = isBetween ? Math.floor(index / this.width) : -1
-    const x = isBetween ? index - y * this.width : -1
+    const between = range(this.size).contains(index)
+    const y = between ? Math.floor(index / this.width) : -1
+    const x = between ? index - y * this.width : -1
     return new Point(x, y)
   }
 
   /**
    * Calculates index for point or coordinate pair
    */
-  pointToIndex = (x: Point | number, y?: number): number => {
-    const _x = x instanceof Point ? x.x : x
-    const _y = x instanceof Point ? x.y : y!
-    return !between(_x, 0, this.width) || !between(_y, 0, this.height)
+  pointToIndex = (x: number, y: number): number =>
+    !range(this.width).contains(x) || !range(this.height).contains(y)
       ? -1
-      : this.width * _y + _x
-  }
+      : this.width * y + x
 
   /**
-   * Makes a copy of current bitmap
+   * Makes a deep copy of current bitmap
    */
-  copy = (iterator?: (value: number, i: number) => number): Bitmap => {
-    const bm = new Bitmap(this.width, this.height)
-    for (let i = 0; i < this.size; i++) {
-      bm.data[i] =
-        typeof iterator === `function`
-          ? iterator(this.data[i], i)
-          : this.data[i]
-    }
+  clone = (): Bitmap => new Bitmap(this.width, this.height, this.data)
+
+  /**
+   * Generates a new thresholded bitmap by mapping all pixel values to 0 (black) or 1 (white)
+   * determined by the given threshold value (0-255)
+   */
+  generateBinaryBitmap = (blackOnWhite: boolean, threshold: number): Bitmap => {
+    const bm = this.clone() //?.
+    const pastTheThreshold = blackOnWhite
+      ? (lum: number) => (lum > threshold ? 0 : 1)
+      : (lum: number) => (lum < threshold ? 0 : 1)
+    bm.lum.map(pastTheThreshold) //?.
+    bm.histogram = bm.generateHistogram() //?.
     return bm
-  }
-
-  histogram = () => {
-    if (this.#histogram) {
-      return this.#histogram
-    }
-
-    this.#histogram = new Histogram(this)
-    return this.#histogram
   }
 
   /**
    * finds next black pixel of the image
    */
-  findNext = (point: Point): false | Point => {
-    let i = this.pointToIndex(point)
-    while (i < this.size && this.data[i] !== 1) {
-      i++
+  findNext = (turnPolicy: String, turdSize: number) => {
+    const self = this
+    let currentPoint: Point = new Point(0, 0)
+    return {
+      *[Symbol.iterator]() {
+        const { x, y } = currentPoint
+        let i = self.pointToIndex(x, y)
+        while (i < self.size && self.lum[i] !== 1) {
+          i++
+        }
+        if (i < self.size) {
+          currentPoint = self.indexToPoint(i)
+          // Extract a new path from the bitmap
+          const path = self.xorPath(self.findPath(currentPoint, turnPolicy))
+          // Trash the path if it's area is too small (despeckle)
+          if (path.area > turdSize) {
+            yield path
+          }
+        }
+      }
     }
-    return i < this.size && this.indexToPoint(i)
   }
 
   /**
@@ -96,47 +119,49 @@ export class Bitmap {
    * cannot have length 0). Sign is required for correct interpretation
    * of turnpolicies.
    */
-  findPath = (point: Point, turnPolicy: String) => {
-    const p = new Path()
-    let x = point.x
-    let y = point.y
+  findPath = (point: Point, turnPolicy: String): Path => {
+    const path = new Path()
+    let x = point.x //?
+    let y = point.y //?
     let dirx = 0
     let diry = 1
 
-    p.sign = this.getValueAt(point.x, point.y) ? `+` : `-`
+    // determine if the pixel is black or white (value is either 0 or 1)
+    path.sign = this.getValueAt(point.x, point.y) ? `+` : `-`
     let searching = true
     while (searching) {
       /* add point to path */
-      p.pt.push(new Point(x, y))
-      if (x > p.maxX) p.maxX = x
-      if (x < p.minX) p.minX = x
-      if (y > p.maxY) p.maxY = y
-      if (y < p.minY) p.minY = y
-      p.len++
+      path.verticies.push(new Point(x, y)) //?
+      if (x > path.maxX) path.maxX = x
+      if (y > path.maxY) path.maxY = y
+      if (x < path.minX) path.minX = x
+      if (y < path.minY) path.minY = y
+      path.len++
       /* move to next point */
       x += dirx
       y += diry
-      p.area -= x * diry
+      path.area -= x * diry
+      // exit loop if we retrun to the starting point
       if (x === point.x && y === point.y) searching = false
 
       /* determine next direction */
-      const l = this.getValueAt(
+      const left = this.getValueAt(
         x + (dirx + diry - 1) / 2,
         y + (diry - dirx - 1) / 2
       )
-      const r = this.getValueAt(
+      const right = this.getValueAt(
         x + (dirx - diry - 1) / 2,
         y + (diry + dirx - 1) / 2
       )
 
-      if (r && !l) {
+      if (right && !left) {
         /* ambiguous turn */
         if (
-          turnPolicy === `right` ||
-          (turnPolicy === `black` && p.sign === `+`) ||
-          (turnPolicy === `white` && p.sign === `-`) ||
-          (turnPolicy === `majority` && this.majority(x, y)) ||
-          (turnPolicy === `minority` && !this.majority(x, y))
+          turnPolicy === TURNPOLICIES.RIGHT ||
+          (turnPolicy === TURNPOLICIES.BLACK && path.sign === `+`) ||
+          (turnPolicy === TURNPOLICIES.WHITE && path.sign === `-`) ||
+          (turnPolicy === TURNPOLICIES.MAJORITY && this.majority(x, y)) ||
+          (turnPolicy === TURNPOLICIES.MINORITY && !this.majority(x, y))
         ) {
           /* right turn */
           let tmp = dirx
@@ -148,68 +173,102 @@ export class Bitmap {
           dirx = diry
           diry = -tmp
         }
-      } else if (r) {
+      } else if (right) {
         /* right turn */
         let tmp = dirx
         dirx = -diry
         diry = tmp
-      } else if (!l) {
+      } else if (!left) {
         /* left turn */
         let tmp = dirx
         dirx = diry
         diry = -tmp
       }
-    } /* while this path */
-    return p
+    }
+    return path //?
   }
 
   /**
    * return the "majority" value of bitmap bm at intersection (x,y). We
    * assume that the bitmap is balanced at "radius" 1.
    */
-  majority = (x: number, y: number) => {
-    for (let i = 2; i < 5; i++) {
+  majority = (x: number, y: number): boolean => {
+    for (const i of range(2, 5)) {
+      // 2..3..4
       let ct = 0
-      for (let a = -i + 1; a <= i - 1; a++) {
+      for (const a of range(-i + 1, i)) {
+        // -1..
         ct += this.getValueAt(x + a, y + i - 1) ? 1 : -1
         ct += this.getValueAt(x + i - 1, y + a - 1) ? 1 : -1
         ct += this.getValueAt(x + a - 1, y - i) ? 1 : -1
         ct += this.getValueAt(x - i, y + a) ? 1 : -1
       }
-      if (ct > 0) return 1
-      if (ct < 0) return 0
+      if (ct > 0) return true
+      if (ct < 0) return false
     }
-    return 0
+    return false
   }
 
   /**
-   * xor the given pixmap with the interior of the given path. Note: the
-   * path must be within the dimensions of the pixmap.
+   * Takes the given path and removes it's interior from a
+   * thresholded bitmap by flipping all black & white pixel values
    */
-  xorPath = (p: Path) => {
-    let y1 = p.pt[0].y
-    let len = p.len
-    let x
-    let y
-    let maxX
-    let minY
-    let i
-    let j
-    let indx
+  xorPath = (path: Path): Path => {
+    const len = path.len
+    let y0 = path.verticies[0].y
 
-    for (i = 1; i < len; i++) {
-      x = p.pt[i].x
-      y = p.pt[i].y
+    for (const vert of range(1, len)) {
+      const minX = path.verticies[vert].x
+      const y = path.verticies[vert].y
 
-      if (y !== y1) {
-        minY = y1 < y ? y1 : y
-        maxX = p.maxX
-        for (j = x; j < maxX; j++) {
-          indx = this.pointToIndex(j, minY)
-          this.data[indx] = this.data[indx] ? 0 : 1
+      if (y !== y0) {
+        const minY = y0 < y ? y0 : y
+        const maxX = path.maxX
+        // flip all pixels in the row
+        for (const x of range(minX, maxX)) {
+          const indx = this.pointToIndex(x, minY)
+          this.lum[indx] = Number(!this.lum[indx])
         }
-        y1 = y
+        y0 = y
       }
     }
+
+    return path
   }
 }
+
+/*
+const Jimp = require(`jimp`)
+
+const loadImg = async () => {
+  const image = await Jimp.read(
+    `https://upload.wikimedia.org/wikipedia/en/7/7d/Lenna_%28test_image%29.png`
+  )
+  const width = image.bitmap.width
+  const height = image.bitmap.height
+  const bitmap = new Bitmap(width, height, image.bitmap.data)
+  bitmap.histogram //?.
+  const { value: path } = bitmap
+    .generateBinaryBitmap(true, 128)
+    .findNext(`minority`, 2)
+    [Symbol.iterator]()
+    .next() //?. $
+  path.calcSums().calcLon().bestPolygon().adjustVertices()
+}
+
+loadImg() //?.
+/*
+let x = 1
+let y = 1
+
+for (let i of range(2, 5)) {
+  i //?
+  for (let a of range(-i + 1, i)) {
+    a // ?
+    let [x1, y1] = [x + a, y + i - 1] //?
+    let [x2, y2] = [x + i - 1, y + a - 1] //?
+    let [x3, y3] = [x + a - 1, y - i] //?
+    let [x4, y4] = [x - i, y + a] //?
+  }
+}
+*/

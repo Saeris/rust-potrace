@@ -1,17 +1,13 @@
-import Jimp from "jimp/*"
-import { Potrace, PotraceOptions } from "./Potrace"
+import Jimp from "jimp"
 import {
   COLOR_TRANSPARENT,
   THRESHOLD_AUTO,
   STEPS_AUTO,
-  FILL_SPREAD,
-  FILL_DOMINANT,
-  FILL_MEDIAN,
-  FILL_MEAN,
+  FILL_STRATEGIES,
   RANGES_AUTO
 } from "./Constants"
-import { between, clamp, isNumber, setHtmlAttribute } from "./utils"
-import { Histogram } from "./types/Histogram"
+import { range, clamp, setHtmlAttribute } from "./utils"
+import { PotraceImage, PotraceOptions } from "./PotraceImage"
 
 /**
  * Posterizer options
@@ -19,11 +15,11 @@ import { Histogram } from "./types/Histogram"
  * @typedef {Potrace~Options} Posterizer~Options
  * @property {Number} [steps]   - Number of samples that needs to be taken (and number of layers in SVG). (default: STEPS_AUTO, which most likely will result in 3, sometimes 4)
  * @property {*} [fillStrategy] - How to select fill color for color ranges - equally spread or dominant. (default: Posterizer.FILL_DOMINANT)
- * @property {*} [rangeDistribution] - How to choose thresholds in-between - after equal intervals or automatically balanced. (default: Posterizer.RANGES_AUTO)
+ * @property {*} [rangeDistribution] - How to choose thresholds in-isBetween - after equal intervals or automatically balanced. (default: Posterizer.RANGES_AUTO)
  */
 export interface PosterizerOptions extends PotraceOptions {
-  steps?: typeof STEPS_AUTO | number | number[]
-  fillStrategy?: typeof FILL_DOMINANT | string
+  steps?: number[]
+  fillStrategy?: typeof FILL_STRATEGIES[keyof typeof FILL_STRATEGIES]
   rangeDistribution?: typeof RANGES_AUTO | string
 }
 
@@ -36,49 +32,35 @@ interface ColorStop {
  * Takes multiple samples using {@link Potrace} with different threshold
  * settings and combines output into a single file.
  */
-export class Posterizer {
-  #potrace = new Potrace()
+export class Posterizer extends PotraceImage {
   #calculatedThreshold: number | null = null
-  #params: Required<
-    Omit<
-      PosterizerOptions,
-      | "turnPolicy"
-      | "turdSize"
-      | "alphaMax"
-      | "optCurve"
-      | "optTolerance"
-      | "color"
-    >
-  > = {
-    threshold: THRESHOLD_AUTO,
-    blackOnWhite: true,
-    background: COLOR_TRANSPARENT,
-    steps: STEPS_AUTO,
-    fillStrategy: FILL_DOMINANT,
-    rangeDistribution: RANGES_AUTO
-  }
+  threshold = THRESHOLD_AUTO
+  blackOnWhite = true
+  background = COLOR_TRANSPARENT
+  steps: number[] = [STEPS_AUTO]
+  rangeDistribution: string = RANGES_AUTO
+  fillStrategy: typeof FILL_STRATEGIES[keyof typeof FILL_STRATEGIES] =
+    FILL_STRATEGIES.DOMINANT
 
   constructor(options?: PosterizerOptions) {
-    if (options) {
-      this.setParameters(options)
-    }
+    super(options)
   }
 
   /**
    * Sets parameters. Accepts same object as {Potrace}
    */
-  setParameters = (params: PosterizerOptions) => {
-    if (!params) return
-    if (
-      params.steps &&
-      !Array.isArray(params.steps) &&
-      (!isNumber(params.steps) || !between(params.steps, 1, 255))
-    ) {
-      throw new Error(`Bad 'steps' value`)
-    }
-    Object.assign(this.#params, params)
-    this.#potrace.setParameters(params)
+  setParameters = (options: PosterizerOptions) => {
+    super.setParameters(options)
     this.#calculatedThreshold = null
+  }
+
+  /**
+   * Loads image.
+   */
+  loadImage = async (target: string | Buffer | Jimp): Promise<this> => {
+    await super.loadImage(target)
+    this.#calculatedThreshold = null
+    return this
   }
 
   /**
@@ -89,7 +71,7 @@ export class Posterizer {
    * shadows and line art
    */
   #addExtraColorStop = (ranges: ColorStop[]) => {
-    let blackOnWhite = this.#params.blackOnWhite
+    let blackOnWhite = this.blackOnWhite
     let lastColorStop = ranges[ranges.length - 1]
     let lastRangeFrom = blackOnWhite ? 0 : lastColorStop.value
     let lastRangeTo = blackOnWhite ? lastColorStop.value : 255
@@ -98,7 +80,7 @@ export class Posterizer {
       lastRangeTo - lastRangeFrom > 25 &&
       lastColorStop.colorIntensity !== 1
     ) {
-      let histogram = this.#getImageHistogram()
+      let histogram = this.bitmap!.histogram
       let levels = histogram.getStats(lastRangeFrom, lastRangeTo).levels
 
       let newColorStop =
@@ -128,11 +110,13 @@ export class Posterizer {
    * Calculates color intensity for each element of numeric array
    */
   #calcColorIntensity = (colorStops: number[]): ColorStop[] => {
-    let blackOnWhite = this.#params.blackOnWhite
-    let colorSelectionStrat = this.#params.fillStrategy
+    let blackOnWhite = this.blackOnWhite
+    let colorSelectionStrat = this.fillStrategy
     let histogram =
-      colorSelectionStrat === FILL_SPREAD ? null : this.#getImageHistogram()
-    let fullRange = Math.abs(this.#paramThreshold() - (blackOnWhite ? 0 : 255))
+      colorSelectionStrat === FILL_STRATEGIES.SPREAD
+        ? null
+        : this.bitmap!.histogram
+    let fullRange = Math.abs(this.#getThreshold() - (blackOnWhite ? 0 : 255))
 
     return colorStops.map((threshold, index) => {
       let nextValue =
@@ -156,7 +140,7 @@ export class Posterizer {
       }
 
       switch (colorSelectionStrat) {
-        case FILL_SPREAD:
+        case FILL_STRATEGIES.SPREAD:
           // We want it to be 0 (255 when white on black) at the most saturated end, so...
           color =
             (blackOnWhite ? rangeStart : rangeEnd) +
@@ -165,17 +149,17 @@ export class Posterizer {
               Math.max(0.5, fullRange / 255) *
               factor
           break
-        case FILL_DOMINANT:
+        case FILL_STRATEGIES.DOMINANT:
           color = histogram!.getDominantColor(
             rangeStart,
             rangeEnd,
             clamp(intervalSize, 1, 5)
           )
           break
-        case FILL_MEAN:
+        case FILL_STRATEGIES.MEAN:
           color = stats!.levels.mean
           break
-        case FILL_MEDIAN:
+        case FILL_STRATEGIES.MEDIAN:
           color = stats!.levels.median
           break
         default:
@@ -197,16 +181,14 @@ export class Posterizer {
     })
   }
 
-  #getImageHistogram = (): Histogram => this.#potrace.luminanceData!.histogram()
-
   /**
    * Processes threshold, steps and rangeDistribution parameters and returns normalized array of color stops
    */
   getRanges = () => {
-    const steps = this.#paramSteps()
+    const steps = this.#getSteps()
 
     if (!Array.isArray(steps)) {
-      return this.#params.rangeDistribution === RANGES_AUTO
+      return this.rangeDistribution === RANGES_AUTO
         ? this.#getRangesAuto()
         : this.#getRangesEquallyDistributed()
     }
@@ -214,11 +196,11 @@ export class Posterizer {
     // Steps is array of thresholds and we want to preprocess it
 
     let colorStops: number[] = []
-    const threshold = this.#paramThreshold()
-    const lookingForDarkPixels = this.#params.blackOnWhite
+    const threshold = this.#getThreshold()
+    const lookingForDarkPixels = this.blackOnWhite
 
     steps.forEach(item => {
-      if (colorStops.indexOf(item) === -1 && between(item, 0, 255)) {
+      if (colorStops.indexOf(item) === -1 && range(255).contains(item)) {
         colorStops.push(item)
       }
     })
@@ -247,15 +229,15 @@ export class Posterizer {
    * Calculates given (or lower) number of thresholds using automatic thresholding algorithm
    */
   #getRangesAuto = (): ColorStop[] => {
-    const histogram = this.#getImageHistogram()
-    const steps = this.#paramSteps(true)
-    const { blackOnWhite } = this.#params
+    const histogram = this.bitmap!.histogram
+    const steps = this.#getSteps(true)
+    const { blackOnWhite } = this
     let colorStops: number[]
 
-    if (this.#params.threshold === THRESHOLD_AUTO) {
+    if (this.threshold === THRESHOLD_AUTO) {
       colorStops = histogram.multilevelThresholding(steps)
     } else {
-      const threshold = this.#paramThreshold()
+      const threshold = this.#getThreshold()
 
       colorStops = blackOnWhite
         ? histogram.multilevelThresholding(steps - 1, 0, threshold)
@@ -280,11 +262,11 @@ export class Posterizer {
    * from least to most intense color (black or white, depending on blackOnWhite parameter)
    */
   #getRangesEquallyDistributed = () => {
-    const blackOnWhite = this.#params.blackOnWhite
+    const { blackOnWhite } = this
     const colorsToThreshold = blackOnWhite
-      ? this.#paramThreshold()
-      : 255 - this.#paramThreshold()
-    const steps = this.#paramSteps()
+      ? this.#getThreshold()
+      : 255 - this.#getThreshold()
+    const steps = this.#getSteps()
     const stepSize = colorsToThreshold / steps
     const colorStops = []
     let i = steps - 1
@@ -302,45 +284,43 @@ export class Posterizer {
   /**
    * Returns valid steps value
    */
-  #paramSteps = (count: boolean = false): number => {
-    const { blackOnWhite, steps, threshold } = this.#params
+  #getSteps = (count: boolean = false): number => {
+    const { blackOnWhite, steps, threshold } = this
 
-    if (Array.isArray(steps) && count) {
+    if (steps[0] !== STEPS_AUTO && count) {
       return steps.length
     }
 
-    if (steps === STEPS_AUTO && threshold === THRESHOLD_AUTO) {
+    if (steps[0] === STEPS_AUTO && threshold === THRESHOLD_AUTO) {
       return 4
     }
 
     const colorsCount = blackOnWhite
-      ? this.#paramThreshold()
-      : 255 - this.#paramThreshold()
+      ? this.#getThreshold()
+      : 255 - this.#getThreshold()
 
-    return steps === STEPS_AUTO
+    return steps[0] === STEPS_AUTO
       ? colorsCount > 200
         ? 4
         : 3
-      : Math.min(colorsCount, Math.max(2, steps as number))
+      : Math.min(colorsCount, Math.max(2, steps[0]))
   }
 
   /**
    * Returns valid threshold value
    */
-  #paramThreshold = (): number => {
+  #getThreshold = (): number => {
     if (this.#calculatedThreshold !== null) {
       return this.#calculatedThreshold
     }
 
-    if (this.#params.threshold !== THRESHOLD_AUTO) {
-      this.#calculatedThreshold = this.#params.threshold
+    if (this.threshold !== THRESHOLD_AUTO) {
+      this.#calculatedThreshold = this.threshold
       return this.#calculatedThreshold
     }
 
-    const twoThresholds = this.#getImageHistogram().multilevelThresholding(2)
-    this.#calculatedThreshold = this.#params.blackOnWhite
-      ? twoThresholds[1]
-      : twoThresholds[0]
+    const [black, white] = this.bitmap!.histogram.multilevelThresholding(2)
+    this.#calculatedThreshold = this.blackOnWhite ? white : black
     this.#calculatedThreshold = this.#calculatedThreshold || 128
 
     return this.#calculatedThreshold
@@ -350,89 +330,71 @@ export class Posterizer {
    * Running potrace on the image multiple times with different thresholds and returns an array
    * of path tags
    */
-  #pathTags = (noFillColor: boolean): string[] => {
+  #getPathTags = (noFillColor: boolean): string => {
     let ranges = this.getRanges()
-    const potrace = this.#potrace
-    const blackOnWhite = this.#params.blackOnWhite
+    const blackOnWhite = this.blackOnWhite
 
     if (ranges.length >= 10) {
       ranges = this.#addExtraColorStop(ranges)
     }
 
-    potrace.setParameters({ blackOnWhite })
+    this.setParameters({ blackOnWhite })
 
     let actualPrevLayersOpacity = 0
 
-    return ranges.map(colorStop => {
-      let thisLayerOpacity = colorStop.colorIntensity
+    return ranges
+      .map(colorStop => {
+        let thisLayerOpacity = colorStop.colorIntensity
 
-      if (thisLayerOpacity === 0) return ``
+        if (thisLayerOpacity === 0) return ``
 
-      // NOTE: With big number of layers (something like 70) there will be noticeable math error on rendering side.
-      // In Chromium at least image will end up looking brighter overall compared to the same layers painted in solid colors.
-      // However it works fine with sane number of layers, and it's not like we can do much about it.
+        // NOTE: With big number of layers (something like 70) there will be noticeable math error on rendering side.
+        // In Chromium at least image will end up looking brighter overall compared to the same layers painted in solid colors.
+        // However it works fine with sane number of layers, and it's not like we can do much about it.
 
-      let calculatedOpacity =
-        !actualPrevLayersOpacity || thisLayerOpacity === 1
-          ? thisLayerOpacity
-          : (actualPrevLayersOpacity - thisLayerOpacity) /
-            (actualPrevLayersOpacity - 1)
+        let calculatedOpacity =
+          !actualPrevLayersOpacity || thisLayerOpacity === 1
+            ? thisLayerOpacity
+            : (actualPrevLayersOpacity - thisLayerOpacity) /
+              (actualPrevLayersOpacity - 1)
 
-      calculatedOpacity = clamp(parseFloat(calculatedOpacity.toFixed(3)), 0, 1)
-      actualPrevLayersOpacity +=
-        (1 - actualPrevLayersOpacity) * calculatedOpacity
+        calculatedOpacity = clamp(
+          parseFloat(calculatedOpacity.toFixed(3)),
+          0,
+          1
+        )
+        actualPrevLayersOpacity +=
+          (1 - actualPrevLayersOpacity) * calculatedOpacity
 
-      potrace.setParameters({ threshold: colorStop.value })
+        this.setParameters({ threshold: colorStop.value })
 
-      let element = noFillColor ? potrace.getPathTag(``) : potrace.getPathTag()
-      element = setHtmlAttribute(
-        element,
-        `fill-opacity`,
-        calculatedOpacity.toFixed(3)
-      )
+        let element = noFillColor ? this.getPathTag(``) : this.getPathTag()
+        element = setHtmlAttribute(
+          element,
+          `fill-opacity`,
+          calculatedOpacity.toFixed(3)
+        )
 
-      const canBeIgnored =
-        calculatedOpacity === 0 || element.indexOf(` d=""`) !== -1
+        const canBeIgnored =
+          calculatedOpacity === 0 || element.indexOf(` d=""`) !== -1
 
-      return canBeIgnored ? `` : element
-    })
-  }
-
-  /**
-   * Loads image.
-   */
-  loadImage = async (target: string | Buffer | Jimp): Promise<Posterizer> => {
-    await this.#potrace.loadImage(target)
-    this.#calculatedThreshold = null
-    return this
+        return canBeIgnored ? `` : element
+      })
+      .join(``)
   }
 
   /**
    * Returns image as <symbol> tag. Always has viewBox specified
    */
-  getSymbol = (id: string): string => {
-    const width = this.#potrace.luminanceData!.width
-    const height = this.#potrace.luminanceData!.height
-    const paths = this.#pathTags(true)
-    return `<symbol viewBox="0 0 ${width} ${height}" id="${id}">${paths.join(
-      ``
-    )}</symbol>`
-  }
+  getSymbol = (id: string): string =>
+    this.symbolFromPaths(this.#getPathTags(true), id)
 
   /**
    * Generates SVG image
    */
-  getSVG = (): string => {
-    const width = this.#potrace.luminanceData!.width
-    const height = this.#potrace.luminanceData!.height
-    const tags = this.#pathTags(false)
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" version="1.1">${this.getBG()}${tags}</svg>`
+  getSVG = (width?: number, height?: number): string => {
+    const w = width || this.bitmap!.width
+    const h = height || this.bitmap!.height
+    return this.svgFromPaths(this.#getPathTags(false), w, h)
   }
-
-  getBG = (): string =>
-    this.#params.background === COLOR_TRANSPARENT
-      ? ``
-      : `<rect x="0" y="0" width="100%" height="100%" fill="${
-          this.#params.background
-        }" />`
 }

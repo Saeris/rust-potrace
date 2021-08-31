@@ -1,10 +1,10 @@
 use std::cmp::min;
 use types::curve::Curve;
-use types::point::Point;
+use types::point::{cross_product, Point};
 use types::quad::Quad;
 use types::sum::Sum;
-use utils::{cyclic, modulo, quadform, sign, xprod};
-
+use utils::{cyclic, modulo, sign};
+#[derive(Clone)]
 pub struct Path {
     pub area: f64,      // = 0
     pub len: usize,     // = 0
@@ -34,21 +34,21 @@ pub struct Path {
 impl Path {
     pub fn default() -> Path {
         Path {
-            area: 0.0,
+            area: 0f64,
             len: 0,
             pt: vec![],
-            min_x: 100000.0,
-            min_y: 100000.0,
-            max_x: -1.0,
-            max_y: -1.0,
+            min_x: 100000f64,
+            min_y: 100000f64,
+            max_x: -1f64,
+            max_y: -1f64,
             m: 0,
             po: vec![],
             lon: vec![],
             curve: Curve::new(0),
-            x0: 0.0,
-            y0: 0.0,
-            x1: 0.0,
-            y1: 0.0,
+            x0: 0f64,
+            y0: 0f64,
+            x1: 0f64,
+            y1: 0f64,
             sums: vec![],
             sign: "+".to_owned(),
         }
@@ -57,8 +57,7 @@ impl Path {
     pub fn calc_sums(&mut self) -> &mut Self {
         self.x0 = self.pt[0].x;
         self.y0 = self.pt[0].y;
-        self.sums = vec![];
-        self.sums.push(Sum::new());
+        self.sums = vec![Sum::new()];
         for i in 0..self.len {
             let x = self.pt[i].x - self.x0;
             let y = self.pt[i].y - self.y0;
@@ -94,10 +93,10 @@ impl Path {
 
         for i in (0..n - 1).rev() {
             let mut ct: [i32; 4] = [0, 0, 0, 0];
-            let mut dir = (3.0
-                + 3.0 * (pt[modulo(i + 1, n)].x - pt[i].x)
+            let mut dir = (3f64
+                + 3f64 * (pt[modulo(i + 1, n)].x - pt[i].x)
                 + (pt[modulo(i + 1, n)].y - pt[i].y))
-                / 2.0;
+                / 2f64;
             ct[dir as usize] += 1;
 
             let (mut point_a, mut point_b) = (Point::default(), Point::default());
@@ -107,7 +106,7 @@ impl Path {
             let mut searching = true;
             while searching {
                 foundk = 0;
-                dir = (3.0 + 3.0 * sign(pt[k].x - pt[k1].x) + sign(pt[k].y - pt[k1].y)) / 2.0;
+                dir = (3f64 + 3f64 * sign(pt[k].x - pt[k1].x) + sign(pt[k].y - pt[k1].y)) / 2f64;
                 ct[dir as usize] += 1;
 
                 if ct[0] != 0 && ct[1] != 0 && ct[2] != 0 && ct[3] != 0 {
@@ -119,40 +118,40 @@ impl Path {
                 cur.x = pt[k].x - pt[i].x;
                 cur.y = pt[k].y - pt[i].y;
 
-                if xprod(point_a, cur) < 0.0 || xprod(point_b, cur) > 0.0 {
+                if cross_product(point_a, cur) < 0f64 || cross_product(point_b, cur) > 0f64 {
                     searching = false;
                 }
 
-                if !(cur.x.abs() <= 1.0 && cur.y.abs() <= 1.0) {
+                if !(cur.x.abs() <= 1f64 && cur.y.abs() <= 1f64) {
                     off.x = cur.x
-                        + if cur.y >= 0.0 && (cur.y > 0.0 || cur.x < 0.0) {
-                            1.0
+                        + if cur.y >= 0f64 && (cur.y > 0f64 || cur.x < 0f64) {
+                            1f64
                         } else {
-                            -1.0
+                            -1f64
                         };
                     off.y = cur.y
-                        + if cur.x <= 0.0 && (cur.x < 0.0 || cur.y < 0.0) {
-                            1.0
+                        + if cur.x <= 0f64 && (cur.x < 0f64 || cur.y < 0f64) {
+                            1f64
                         } else {
-                            -1.0
+                            -1f64
                         };
-                    if xprod(point_a, off) >= 0.0 {
+                    if cross_product(point_a, off) >= 0f64 {
                         point_a.x = off.x;
                         point_a.y = off.y;
                     }
                     off.x = cur.x
-                        + if cur.y <= 0.0 && (cur.y < 0.0 || cur.x < 0.0) {
-                            1.0
+                        + if cur.y <= 0f64 && (cur.y < 0f64 || cur.x < 0f64) {
+                            1f64
                         } else {
-                            -1.0
+                            -1f64
                         };
                     off.y = cur.y
-                        + if cur.x >= 0.0 && (cur.x > 0.0 || cur.y < 0.0) {
-                            1.0
+                        + if cur.x >= 0f64 && (cur.x > 0f64 || cur.y < 0f64) {
+                            1f64
                         } else {
-                            -1.0
+                            -1f64
                         };
-                    if xprod(point_b, off) <= 0.0 {
+                    if cross_product(point_b, off) <= 0f64 {
                         point_b.x = off.x;
                         point_b.y = off.y;
                     }
@@ -170,18 +169,18 @@ impl Path {
                 cur.y = pt[k1].y - pt[i].y;
 
                 let (a, b, c, d) = (
-                    xprod(point_a, cur),
-                    xprod(point_a, dk),
-                    xprod(point_b, cur),
-                    xprod(point_b, dk),
+                    cross_product(point_a, cur),
+                    cross_product(point_a, dk),
+                    cross_product(point_b, cur),
+                    cross_product(point_b, dk),
                 );
 
                 j = 10000000;
 
-                if b < 0.0 {
+                if b < 0f64 {
                     j = (a / -b).floor() as usize;
                 }
-                if d > 0.0 {
+                if d > 0f64 {
                     j = min(j, (-c / d).floor() as usize);
                 }
 
@@ -209,8 +208,6 @@ impl Path {
 
     pub fn best_polygon(&mut self) -> &mut Self {
         let n = self.len;
-        let mut pen: Vec<i32> = Vec::with_capacity(n + 1);
-        let mut prev = Vec::with_capacity(n + 1);
         let mut clip0 = Vec::with_capacity(n);
         let mut clip1 = Vec::with_capacity(n + 1);
         let mut seg0 = Vec::with_capacity(n + 1);
@@ -253,18 +250,19 @@ impl Path {
         }
         seg1[0] = 0;
 
-        pen[0] = 0;
+        let mut prev = Vec::with_capacity(n + 1);
+        let mut penalties = vec![0i32; n + 1];
         for j in 1..(m + 1) {
             for i in seg1[j]..(seg0[j] + 1) {
                 let mut best = -1;
                 for k in (seg0[j - 1]..clip1[i]).rev() {
-                    let selfpen = self.penalty3(k, i) + pen[k];
+                    let selfpen = self.penalty3(k, i) + penalties[k];
                     if best < 0 || selfpen < best {
                         prev[i] = k;
                         best = selfpen;
                     }
                 }
-                pen[i] = best;
+                penalties[i] = best;
             }
         }
         self.m = m;
@@ -317,14 +315,14 @@ impl Path {
         } else {
             (idx + 1 - i + len) as f64
         };
-        let px: f64 = (pt[i].x + pt[idx].x) / 2.0 - pt[0].x;
-        let py: f64 = (pt[i].y + pt[idx].y) / 2.0 - pt[0].y;
+        let px: f64 = (pt[i].x + pt[idx].x) / 2f64 - pt[0].x;
+        let py: f64 = (pt[i].y + pt[idx].y) / 2f64 - pt[0].y;
         let ex: f64 = pt[idx].x - pt[i].x;
         let ey: f64 = -(pt[idx].y - pt[i].y);
-        let a: f64 = (x2 - 2.0 * x * px) / k + px * px;
+        let a: f64 = (x2 - 2f64 * x * px) / k + px * px;
         let b: f64 = (xy - x * py - y * px) / k + px * py;
-        let c: f64 = (y2 - 2.0 * y * py) / k + py * py;
-        return (ex * ex * a + 2.0 * ex * ey * b + ey * ey * c).sqrt() as i32;
+        let c: f64 = (y2 - 2f64 * y * py) / k + py * py;
+        return (ex * ex * a + 2f64 * ex * ey * b + ey * ey * c).sqrt() as i32;
     }
 
     pub fn adjust_vertices(&mut self) -> Curve {
@@ -358,10 +356,10 @@ impl Path {
                 ..Default::default()
             };
             let d = dir[i].x * dir[i].x + dir[i].y * dir[i].y;
-            if d == 0.0 {
+            if d == 0f64 {
                 for j in 0..3 {
                     for k in 0..3 {
-                        q[i].data[j * 3 + k] = 0.0;
+                        q[i].data[j * 3 + k] = 0f64;
                     }
                 }
             } else {
@@ -396,7 +394,7 @@ impl Path {
             let mut searching = true;
             while searching {
                 let det = quad.at(0, 0) * quad.at(1, 1) - quad.at(0, 1) * quad.at(1, 0);
-                if det != 0.0 {
+                if det != 0f64 {
                     w.x = (-quad.at(0, 2) * quad.at(1, 1) + quad.at(1, 2) * quad.at(0, 1)) / det;
                     w.y = (quad.at(0, 2) * quad.at(1, 0) - quad.at(1, 2) * quad.at(0, 0)) / det;
                     searching = false;
@@ -405,12 +403,12 @@ impl Path {
                 if quad.at(0, 0) > quad.at(1, 1) {
                     v[0] = -quad.at(0, 1);
                     v[1] = quad.at(0, 0);
-                } else if quad.at(1, 1) != 0.0 {
+                } else if quad.at(1, 1) != 0f64 {
                     v[0] = -quad.at(1, 1);
                     v[1] = quad.at(1, 0);
                 } else {
-                    v[0] = 1.0;
-                    v[1] = 0.0;
+                    v[0] = 1f64;
+                    v[1] = 0f64;
                 }
                 let d = v[0] * v[0] + v[1] * v[1];
                 v[2] = -v[1] * s.y - v[0] * s.x;
@@ -427,16 +425,16 @@ impl Path {
                 continue;
             }
 
-            let mut min = quadform(quad.clone(), s);
+            let mut min = quad.quadform(s);
             let mut xmin = s.x;
             let mut ymin = s.y;
 
-            if quad.at(0, 0) != 0.0 {
+            if quad.at(0, 0) != 0f64 {
                 for z in 0..2 {
                     w.y = s.y - 0.5 + z as f64;
                     w.x = -(quad.at(0, 1) * w.y + quad.at(0, 2)) / quad.at(0, 0);
                     dx = (w.x - s.x).abs();
-                    let cand = quadform(quad.clone(), w);
+                    let cand = quad.quadform(w);
                     if dx <= 0.5 && cand < min {
                         min = cand;
                         xmin = w.x;
@@ -445,12 +443,12 @@ impl Path {
                 }
             }
 
-            if quad.at(1, 1) != 0.0 {
+            if quad.at(1, 1) != 0f64 {
                 for z in 0..2 {
                     w.x = s.x - 0.5 + z as f64;
                     w.y = -(quad.at(1, 0) * w.x + quad.at(1, 2)) / quad.at(1, 1);
                     dy = (w.y - s.y).abs();
-                    let cand = quadform(quad.clone(), w);
+                    let cand = quad.quadform(w);
                     if dy <= 0.5 && cand < min {
                         min = cand;
                         xmin = w.x;
@@ -463,7 +461,7 @@ impl Path {
                 for k in 0..2 {
                     w.x = s.x - 0.5 + l as f64;
                     w.y = s.y - 0.5 + k as f64;
-                    let cand = quadform(quad.clone(), w);
+                    let cand = quad.quadform(w);
                     if cand < min {
                         min = cand;
                         xmin = w.x;
@@ -483,23 +481,23 @@ impl Path {
         let sums = &self.sums;
         let mut _i = i;
         let mut _j = j;
-        let mut r = 0.0;
+        let mut r = 0f64;
 
         while _j >= len {
             _j -= len;
-            r += 1.0;
+            r += 1f64;
         }
         while _i >= len {
             _i -= len;
-            r -= 1.0;
+            r -= 1f64;
         }
         while _j < 0 {
             _j += len;
-            r -= 1.0;
+            r -= 1f64;
         }
         while _i < 0 {
             _i += len;
-            r += 1.0;
+            r += 1f64;
         }
 
         let x1 = sums[_j + 1].x - sums[_i].x + r * sums[len].x;
@@ -507,7 +505,7 @@ impl Path {
         let x2 = sums[_j + 1].x2 - sums[_i].x2 + r * sums[len].x2;
         let xy = sums[_j + 1].xy - sums[_i].xy + r * sums[len].xy;
         let y2 = sums[_j + 1].y2 - sums[_i].y2 + r * sums[len].y2;
-        let k = _j as f64 + 1.0 - _i as f64 + r * len as f64;
+        let k = _j as f64 + 1f64 - _i as f64 + r * len as f64;
 
         ctr.x = x1 / k;
         ctr.y = y1 / k;
@@ -516,7 +514,7 @@ impl Path {
         let b = (xy - (x1 * y1) / k) / k;
         let mut c = (y2 - (y1 * y1) / k) / k;
 
-        let lambda2: f64 = (a + c + ((a - c) * (a - c) + 4.0 * b * b)).sqrt() / 2.0;
+        let lambda2: f64 = (a + c + ((a - c) * (a - c) + 4f64 * b * b)).sqrt() / 2f64;
 
         a -= lambda2;
         c -= lambda2;
@@ -526,19 +524,19 @@ impl Path {
             (c * c + b * b).sqrt()
         };
         if a.abs() >= c.abs() {
-            if l != 0.0 {
+            if l != 0f64 {
                 dir.x = -b / l;
                 dir.y = a / l;
             }
         } else {
-            if l != 0.0 {
+            if l != 0f64 {
                 dir.x = -c / l;
                 dir.y = b / l;
             }
         }
-        if l == 0.0 {
-            dir.x = 0.0;
-            dir.y = 0.0;
+        if l == 0f64 {
+            dir.x = 0f64;
+            dir.y = 0f64;
         }
     }
 }

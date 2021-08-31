@@ -1,5 +1,6 @@
 import { default as Jimp } from "jimp"
-import { Potrace, PotraceOptions } from "./Potrace"
+import { Potrace } from "./Potrace"
+import { PotraceOptions } from "./PotraceImage"
 import { Posterizer, PosterizerOptions } from "./Posterizer"
 
 export type PotraceCB = (

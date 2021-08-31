@@ -99,7 +99,7 @@
       ]
     ]
   },
-  "gitHooks": {
-    "pre-commit": "lint-staged"
+  "dependencies": {
+    "jimp": "^0.16.1"
   }
 }

@@ -1,3 +1,4 @@
+// file.skip
 import { readFileSync } from "fs"
 import { read } from "jimp"
 import { Potrace } from "../Potrace"
@@ -61,7 +62,7 @@ describe(`Potrace class`, () => {
 
   describe(`#processPath`, () => {
     const instance = new Potrace()
-    let processingSpy = jest.spyOn(instance, `processPath`)
+    let processingSpy = jest.spyOn(instance, `getPathTag`)
 
     it(`should not execute until path is requested for the first time`, async () => {
       const img = await instance.loadImage(jimpInstance)

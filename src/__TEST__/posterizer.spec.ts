@@ -1,3 +1,4 @@
+// file.skip
 import { readFileSync } from "fs"
 import { read } from "jimp"
 import { Posterizer } from "../Posterizer"
@@ -8,7 +9,12 @@ import {
   PATH_TO_POSTERIZED_YAO_BLACK_THRESHOLD_170,
   PATH_TO_POSTERIZED_CLOUDS_WHITE_40
 } from "./snapshots"
-import { PATH_TO_YAO, blackImage, whiteImage } from "./sources"
+import {
+  PATH_TO_YAO,
+  PATH_TO_BLACK_AND_WHITE_IMAGE,
+  blackImage,
+  whiteImage
+} from "./sources"
 
 describe(`Posterizer class`, () => {
   let jimpInstance = null
@@ -39,7 +45,7 @@ describe(`Posterizer class`, () => {
       posterizer.setParameters({
         rangeDistribution: RANGES_EQUAL,
         threshold: 200,
-        steps: 4,
+        steps: [4],
         blackOnWhite: true
       })
 
@@ -48,7 +54,7 @@ describe(`Posterizer class`, () => {
       posterizer.setParameters({
         rangeDistribution: RANGES_EQUAL,
         threshold: 155,
-        steps: 4,
+        steps: [4],
         blackOnWhite: false
       })
 
@@ -57,7 +63,7 @@ describe(`Posterizer class`, () => {
       posterizer.setParameters({
         rangeDistribution: RANGES_EQUAL,
         threshold: THRESHOLD_AUTO,
-        steps: 4,
+        steps: [4],
         blackOnWhite: true
       })
 
@@ -68,7 +74,7 @@ describe(`Posterizer class`, () => {
       posterizer.setParameters({
         rangeDistribution: RANGES_AUTO,
         threshold: THRESHOLD_AUTO,
-        steps: 3,
+        steps: [3],
         blackOnWhite: true
       })
 
@@ -77,7 +83,7 @@ describe(`Posterizer class`, () => {
       posterizer.setParameters({
         rangeDistribution: RANGES_AUTO,
         threshold: THRESHOLD_AUTO,
-        steps: 3,
+        steps: [3],
         blackOnWhite: false
       })
 
@@ -88,7 +94,7 @@ describe(`Posterizer class`, () => {
       posterizer.setParameters({
         rangeDistribution: RANGES_AUTO,
         threshold: 128,
-        steps: 4,
+        steps: [4],
         blackOnWhite: true
       })
 
@@ -97,7 +103,7 @@ describe(`Posterizer class`, () => {
       posterizer.setParameters({
         rangeDistribution: RANGES_AUTO,
         threshold: 128,
-        steps: 4,
+        steps: [4],
         blackOnWhite: false
       })
 
@@ -215,12 +221,12 @@ describe(`Posterizer class`, () => {
       const instance = new Posterizer({
         threshold: 40,
         blackOnWhite: false,
-        steps: 3,
+        steps: [3],
         color: `beige`,
         background: `#222`
       })
 
-      await instance.loadImage(`sources/clouds.jpg`)
+      await instance.loadImage(PATH_TO_BLACK_AND_WHITE_IMAGE)
       const expected = readFileSync(PATH_TO_POSTERIZED_CLOUDS_WHITE_40, {
         encoding: `utf8`
       })
@@ -241,7 +247,7 @@ describe(`Posterizer class`, () => {
       instanceYao.setParameters({
         color: `red`,
         background: `cyan`,
-        steps: 3
+        steps: [3]
       })
       const symbol = instanceYao.getSymbol(`whatever`)
       expect(symbol).not.toMatch(/<rect/i)
@@ -271,7 +277,7 @@ describe(`Posterizer class`, () => {
       await instance.loadImage(whiteImage)
       instance.setParameters({ blackOnWhite: true })
       let svg1 = instance.getSVG()
-      instance.setParameters({ blackOnWhite: true, steps: 3, threshold: 128 })
+      instance.setParameters({ blackOnWhite: true, steps: [3], threshold: 128 })
       let svg2 = instance.getSVG()
       instance.setParameters({
         blackOnWhite: true,

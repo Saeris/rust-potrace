@@ -1,8 +1,67 @@
 use super::opti::Opti;
-use super::point::Point;
-use crate::utils::{
-    bezier, cprod, ddenom, ddist, dpara, fixed, interval, iprod, iprod1, modulo, sign, tangent,
+use super::point::{
+    area_of_parallelogram, cubic_cross_product, cubic_inner_product, ddenom, distance_between,
+    interval, quadratic_inner_product, Point,
 };
+use crate::utils::{modulo, sign};
+
+/// Casts a decimal number to a fixed length and returns it as
+/// a string. Truncates trailing 0's.
+///
+/// ## Arguments
+/// * `number` - A u8 with an arbitrary number of decimal places
+///
+/// ## Example
+///
+/// ```
+/// let mut str1 = fixed(123.45678)
+/// println!(&str1) // "123.456"
+/// /// let mut str2 = fixed(456.00078)
+/// println!(&str2) // "456"
+/// ```
+pub fn fixed(number: f64) -> String {
+    return format!("{:.3}", number).replace(".000", "");
+}
+
+/// return a point on a 1-dimensional Bezier segment
+pub fn bezier(t: f64, p0: Point, p1: Point, p2: Point, p3: Point) -> Point {
+    let s = 1f64 - t;
+    return Point::new(
+        s.powi(3) * p0.x
+            + 3f64 * (s.powi(2) * t) * p1.x
+            + 3f64 * (t.powi(2) * s) * p2.x
+            + t.powi(3) * p3.x,
+        s.powi(3) * p0.y
+            + 3f64 * (s.powi(2) * t) * p1.y
+            + 3f64 * (t.powi(2) * s) * p2.y
+            + t.powi(3) * p3.y,
+    );
+}
+
+/// calculate the point t in [0..1] on the (convex) bezier curve
+/// (p0,p1,p2,p3) which is tangent to q1-q0. Return -1.0 if there is no
+/// solution in [0..1].
+pub fn tangent(p0: Point, p1: Point, p2: Point, p3: Point, q0: Point, q1: Point) -> f64 {
+    let A = cubic_cross_product(p0, p1, q0, q1);
+    let B = cubic_cross_product(p1, p2, q0, q1);
+    let C = cubic_cross_product(p2, p3, q0, q1);
+    let a = A - 2f64 * B + C;
+    let b = -2f64 * A + 2f64 * B;
+    let c = &A;
+    let d = b * b - 4f64 * a * c;
+    if a == 0f64 || d < 0f64 {
+        return -1f64;
+    }
+    let s = d.sqrt();
+    let r1 = (-b + s) / (2f64 * a);
+    let r2 = (-b - s) / (2f64 * a);
+    if (0f64..=1f64).contains(&r1) {
+        return r1;
+    } else if (0f64..=1f64).contains(&r2) {
+        return r2;
+    }
+    return -1f64;
+}
 
 const CORNER: &str = "CORNER";
 const CURVE: &str = "CURVE";
@@ -76,12 +135,12 @@ impl Curve {
             let j = modulo(i + 1, *n);
             let k = modulo(i + 2, *n);
             let denom = ddenom(vertex[i], vertex[k]);
-            let mut new_alpha = 0.0;
-            if denom == 0.0 {
-                new_alpha = 4.0 / 3.0;
+            let mut new_alpha = 0f64;
+            if denom == 0f64 {
+                new_alpha = 4f64 / 3f64;
             } else {
-                let dd = (dpara(vertex[i], vertex[j], vertex[k]) / denom).abs();
-                new_alpha = if dd > 1.0 { 1.0 - 1.0 / dd } else { 0.0 };
+                let dd = (area_of_parallelogram(vertex[i], vertex[j], vertex[k]) / denom).abs();
+                new_alpha = if dd > 1f64 { 1f64 - 1f64 / dd } else { 0f64 };
                 new_alpha /= 0.75;
             }
             alpha0[j] = new_alpha;
@@ -97,8 +156,8 @@ impl Curve {
             } else {
                 if new_alpha < 0.55 {
                     new_alpha = 0.55;
-                } else if new_alpha > 1.0 {
-                    new_alpha = 1.0;
+                } else if new_alpha > 1f64 {
+                    new_alpha = 1f64;
                 }
                 c[3 * j + 0] = interval(0.5 + 0.5 * new_alpha, vertex[i], vertex[j]);
                 c[3 * j + 1] = interval(0.5 + 0.5 * new_alpha, vertex[k], vertex[j]);
@@ -112,7 +171,7 @@ impl Curve {
         self.beta = beta;
         self.c = c;
         self.tag = tag;
-        self.alpha_curve = 1.0;
+        self.alpha_curve = 1f64;
     }
     pub fn optimize_curve(&mut self, opt_tolerance: f64) {
         let m = self.n;
@@ -121,16 +180,16 @@ impl Curve {
         let mut areac = Vec::with_capacity(m + 1);
         for i in 0..m {
             convc[i] = match self.tag[i] {
-                Tag::CURVE => sign(dpara(
+                Tag::CURVE => sign(area_of_parallelogram(
                     vert[modulo(i - 1, m)],
                     vert[i],
                     vert[modulo(i + 1, m)],
                 )),
-                Tag::CORNER => 0.0,
+                Tag::CORNER => 0f64,
             }
         }
-        let mut area = 0.0;
-        areac[0] = 0.0;
+        let mut area = 0f64;
+        areac[0] = 0f64;
         let p0 = self.vertex[0];
         for i in 0..m {
             let idx = modulo(i + 1, m);
@@ -139,10 +198,11 @@ impl Curve {
                     let alpha = self.alpha[idx];
                     area += (0.3
                         * alpha
-                        * (4.0 - alpha)
-                        * dpara(self.c[i * 3 + 2], vert[idx], self.c[idx * 3 + 2]))
-                        / 2.0;
-                    area += dpara(p0, self.c[i * 3 + 2], self.c[idx * 3 + 2]) / 2.0;
+                        * (4f64 - alpha)
+                        * area_of_parallelogram(self.c[i * 3 + 2], vert[idx], self.c[idx * 3 + 2]))
+                        / 2f64;
+                    area +=
+                        area_of_parallelogram(p0, self.c[i * 3 + 2], self.c[idx * 3 + 2]) / 2f64;
                 }
                 Tag::CORNER => {}
             }
@@ -152,29 +212,30 @@ impl Curve {
         let mut pen: Vec<usize> = vec![0];
         let mut len: Vec<usize> = vec![0];
         let mut opt = Vec::with_capacity(m + 1);
-        let mut j = 1;
-        for i in j..(m + 1) {
-            pt[i] = i - 1;
-            pen[i] = pen[i - 1];
-            len[i] = len[i - 1] + 1;
-            for i in (0..(j - 2)).rev() {
+        for segment in 1..=m {
+            pt[segment] = segment - 1;
+            pen[segment] = pen[segment - 1];
+            len[segment] = len[segment - 1] + 1;
+            for i in (0..=(segment - 1)).rev() {
                 let res = Opti::default();
                 let r = self.optimization_penalty(
                     i,
-                    modulo(j, m),
+                    modulo(segment, m),
                     res.clone(),
                     opt_tolerance,
                     convc.clone(),
                     areac.clone(),
                 );
-                if r == 0.0 {
+                if r == 0f64 {
                     break;
                 }
-                if len[j] > len[i] + 1 || (len[j] == len[i] + 1 && pen[j] > pen[i] + &res.pen) {
-                    pt[j] = i;
-                    pen[j] = pen[i] + &res.pen;
-                    len[j] = len[i] + 1;
-                    opt[j] = res;
+                if len[segment] > len[i] + 1
+                    || (len[segment] == len[i] + 1 && pen[segment] > pen[i] + &res.pen)
+                {
+                    pt[segment] = i;
+                    pen[segment] = pen[i] + &res.pen;
+                    len[segment] = len[i] + 1;
+                    opt[segment] = res;
                 }
             }
         }
@@ -182,8 +243,8 @@ impl Curve {
         let mut ocurve = Curve::new(om);
         let mut s = Vec::with_capacity(om);
         let mut t = Vec::with_capacity(om);
-        j = m;
-        for i in (0..(om - 1)).rev() {
+        let mut j = m;
+        for i in (0..=om).rev() {
             if pt[j] == j - 1 {
                 ocurve.tag[i] = self.tag[modulo(j, m)].clone();
                 ocurve.c[i * 3 + 0] = self.c[modulo(j, m) * 3 + 0];
@@ -193,8 +254,8 @@ impl Curve {
                 ocurve.alpha[i] = self.alpha[modulo(j, m)];
                 ocurve.alpha0[i] = self.alpha0[modulo(j, m)];
                 ocurve.beta[i] = self.beta[modulo(j, m)];
-                s[i] = 1.0;
-                t[i] = 1.0;
+                s[i] = 1f64;
+                t[i] = 1f64;
             } else {
                 ocurve.tag[i] = Tag::CURVE;
                 ocurve.c[i * 3 + 0] = opt[j].c[0];
@@ -209,10 +270,10 @@ impl Curve {
             }
             j = pt[j];
         }
-        for i in 0..(om) {
+        for i in 0..om {
             ocurve.beta[i] = s[i] / (s[i] + t[modulo(i + 1, om)]);
         }
-        ocurve.alpha_curve = 1.0;
+        ocurve.alpha_curve = 1f64;
 
         self.assign(ocurve);
     }
@@ -223,59 +284,64 @@ impl Curve {
         j: usize,
         mut res: Opti,
         opt_tolerance: f64,
-        convc: Vec<f64>,
+        convexities: Vec<f64>,
         areac: Vec<f64>,
     ) -> f64 {
-        let m = self.n;
+        let segments = self.n;
         let vertex = self.vertex.clone();
         if i == j {
-            return 1.0;
+            return 1f64;
         }
         let mut k = i;
-        let idx = modulo(i + 1, m);
-        let mut k1 = modulo(k + 1, m);
-        let conv = convc[k1];
-        if conv == 0.0 {
-            return 1.0;
+        let idx = modulo(i + 1, segments);
+        let mut k1 = modulo(k + 1, segments);
+        let convexity = convexities[k1];
+        if convexity == 0f64 {
+            return 1f64;
         }
         k = k1;
         while k != j {
-            k1 = modulo(k + 1, m);
-            let k2 = modulo(k + 2, m);
-            let d = ddist(vertex[i], vertex[idx]);
-            if (convc[k1] != conv)
-                || (sign(cprod(vertex[i], vertex[idx], vertex[k1], vertex[k2])) != conv)
-                || (iprod1(vertex[i], vertex[idx], vertex[k1], vertex[k2])
-                    < d * ddist(vertex[k1], vertex[k2]) * -0.999847695156)
+            k1 = modulo(k + 1, segments);
+            let k2 = modulo(k + 2, segments);
+            let d = distance_between(vertex[i], vertex[idx]);
+            if (convexities[k1] != convexity)
+                || (sign(cubic_cross_product(
+                    vertex[i],
+                    vertex[idx],
+                    vertex[k1],
+                    vertex[k2],
+                )) != convexity)
+                || (cubic_inner_product(vertex[i], vertex[idx], vertex[k1], vertex[k2])
+                    < d * distance_between(vertex[k1], vertex[k2]) * -0.999847695156)
             {
-                return 1.0;
+                return 1f64;
             }
             k = k1
         }
-        let p0 = self.c[modulo(i, m) * 3 + 2].clone();
-        let mut p1 = vertex[modulo(i + 1, m)].clone();
-        let mut p2 = vertex[modulo(j, m)].clone();
-        let p3 = self.c[modulo(j, m) * 3 + 2].clone();
+        let p0 = self.c[modulo(i, segments) * 3 + 2].clone();
+        let mut p1 = vertex[modulo(i + 1, segments)].clone();
+        let mut p2 = vertex[modulo(j, segments)].clone();
+        let p3 = self.c[modulo(j, segments) * 3 + 2].clone();
         let mut area = areac[j] - areac[i];
-        area -= dpara(vertex[0], self.c[i * 3 + 2], self.c[j * 3 + 2]) / 2.0;
+        area -= area_of_parallelogram(vertex[0], self.c[i * 3 + 2], self.c[j * 3 + 2]) / 2f64;
         if i >= j {
-            area += areac[m];
+            area += areac[segments];
         }
-        let A1 = dpara(p0, p1, p2);
-        let A2 = dpara(p0, p1, p3);
-        let A3 = dpara(p0, p2, p3);
+        let A1 = area_of_parallelogram(p0, p1, p2);
+        let A2 = area_of_parallelogram(p0, p1, p3);
+        let A3 = area_of_parallelogram(p0, p2, p3);
         let A4 = A1 + A3 - A2;
         if A2 == A1 {
-            return 1.0;
+            return 1f64;
         }
         let mut t = A3 / (A3 - A4);
         let s = A2 / (A2 - A1);
-        let A = (A2 * t) / 2.0;
-        if A == 0.0 {
-            return 1.0;
+        let A = (A2 * t) / 2f64;
+        if A == 0f64 {
+            return 1f64;
         }
         let R = area / A;
-        let alpha = 2.0 - (4.0 - R / 0.3).sqrt();
+        let alpha = 2f64 - (4f64 - R / 0.3).sqrt();
         res.c[0] = interval(t * alpha, p0, p1);
         res.c[1] = interval(s * alpha, p3, p2);
         res.alpha = alpha;
@@ -284,49 +350,51 @@ impl Curve {
         p1 = res.c[0].clone();
         p2 = res.c[1].clone();
         res.pen = 0;
-        let mut k = modulo(i + 1, m);
+        let mut k = modulo(i + 1, segments);
         while k != j {
-            k1 = modulo(k + 1, m);
+            k1 = modulo(k + 1, segments);
             t = tangent(p0, p1, p2, p3, vertex[k], vertex[k1]);
             if t < -0.5 {
-                return 1.0;
+                return 1f64;
             }
             let pt = bezier(t, p0, p1, p2, p3);
-            let d = ddist(vertex[k], vertex[k1]);
-            if d == 0.0 {
-                return 1.0;
+            let d = distance_between(vertex[k], vertex[k1]);
+            if d == 0f64 {
+                return 1f64;
             }
-            let d1 = dpara(vertex[k], vertex[k1], pt) / d;
+            let d1 = area_of_parallelogram(vertex[k], vertex[k1], pt) / d;
             if d1.abs() > opt_tolerance
-                || (iprod(vertex[k], vertex[k1], pt) < 0.0
-                    || iprod(vertex[k1], vertex[k], pt) < 0.0)
+                || (quadratic_inner_product(vertex[k], vertex[k1], pt) < 0f64
+                    || quadratic_inner_product(vertex[k1], vertex[k], pt) < 0f64)
             {
-                return 1.0;
+                return 1f64;
             }
             res.pen += (d1 * d1) as usize;
             k = k1;
         }
         k = i;
         while k != j {
-            k1 = modulo(k + 1, m);
+            k1 = modulo(k + 1, segments);
             t = tangent(p0, p1, p2, p3, self.c[k * 3 + 2], self.c[k1 * 3 + 2]);
             if t < -0.5 {
-                return 1.0;
+                return 1f64;
             }
             let pt = bezier(t, p0, p1, p2, p3);
-            let d = ddist(self.c[k * 3 + 2], self.c[k1 * 3 + 2]);
-            if d == 0.0 {
-                return 1.0;
+            let distance = distance_between(self.c[k * 3 + 2], self.c[k1 * 3 + 2]);
+            if distance == 0f64 {
+                return 1f64;
             }
-            let mut d1 = dpara(self.c[k * 3 + 2], self.c[k1 * 3 + 2], pt) / d;
-            let mut d2 = dpara(self.c[k * 3 + 2], self.c[k1 * 3 + 2], vertex[k1]) / d;
+            let mut d1 =
+                area_of_parallelogram(self.c[k * 3 + 2], self.c[k1 * 3 + 2], pt) / distance;
+            let mut d2 =
+                area_of_parallelogram(self.c[k * 3 + 2], self.c[k1 * 3 + 2], vertex[k1]) / distance;
             d2 *= 0.75 * self.alpha[k1];
-            if d2 < 0.0 {
+            if d2 < 0f64 {
                 d1 = -d1;
                 d2 = -d2;
             }
             if d1 < d2 - opt_tolerance {
-                return 1.0;
+                return 1f64;
             }
             if d1 < d2 {
                 res.pen += ((d1 - d2) * (d1 - d2)) as usize;
@@ -334,7 +402,7 @@ impl Curve {
             k = k1;
         }
 
-        return 0.0;
+        return 0f64;
     }
     pub fn render_curve(&self, width: f64, height: f64) -> String {
         let origin = self.c[(self.n - 1) * 3 + 2];

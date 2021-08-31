@@ -1,3 +1,4 @@
+#[derive(Copy, Clone)]
 pub struct Sum {
     __constructor: (),
     pub x: f64,

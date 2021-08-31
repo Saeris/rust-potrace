@@ -1,9 +1,7 @@
 use base64::decode;
-use constants::{SupportedTurnpolicyValues, COLOR_AUTO, COLOR_TRANSPARENT, THRESHOLD_AUTO};
-use image::DynamicImage;
+use constants::{SupportedTurnpolicyValues, COLOR_AUTO, COLOR_TRANSPARENT};
 use types::{bitmap::Bitmap, path::Path, point::Point};
-use utils::luminance;
-
+#[derive(Clone)]
 pub struct PotraceOptions {
     /// how to resolve ambiguities in path decomposition. (default: "minority")
     turnPolicy: SupportedTurnpolicyValues,
@@ -26,93 +24,57 @@ pub struct PotraceOptions {
 impl Default for PotraceOptions {
     fn default() -> PotraceOptions {
         return PotraceOptions {
-            turnPolicy: SupportedTurnpolicyValues::TurnpolicyMinority,
+            turnPolicy: SupportedTurnpolicyValues::Minority,
             turdSize: 2,
             alphaMax: 1,
             optCurve: true,
             optTolerance: 0.2,
             threshold: None,
             blackOnWhite: true,
-            color: Some(Box::new(COLOR_AUTO)),
-            background: Some(Box::new(COLOR_TRANSPARENT)),
+            color: Some(Box::new(COLOR_AUTO.to_string())),
+            background: Some(Box::new(COLOR_TRANSPARENT.to_string())),
             width: None,
             height: None,
         };
     }
 }
-
-/// Potrace class
+#[derive(Clone)]
 pub struct Potrace {
-    pub luminanceData: Option<Box<Bitmap>>,
+    pub luminanceData: Bitmap,
     pathlist: Vec<Path>, // []
-    imageLoaded: bool,   // = false
     processed: bool,     // = false
     params: PotraceOptions,
 }
 
-impl Default for Potrace {
-    fn default() -> Potrace {
-        Potrace {
-            luminanceData: None,
-            pathlist: vec![],
-            imageLoaded: false,
-            processed: false,
-            params: PotraceOptions {
-                ..Default::default()
-            },
-        }
-    }
-}
-
 impl Potrace {
-    pub fn new(options: Option<Box<PotraceOptions>>) -> Potrace {
+    pub fn new(base64: &str, options: Option<Box<PotraceOptions>>) -> Potrace {
+        let slice = decode(base64).unwrap().as_slice();
+        let img = image::load_from_memory(slice).unwrap();
+        let bitmap = Bitmap::new(img);
         match options {
             Some(val) => Potrace {
+                luminanceData: bitmap,
+                pathlist: vec![],
+                processed: false,
                 params: *val,
-                ..Default::default()
             },
             None => Potrace {
-                ..Default::default()
+                luminanceData: bitmap,
+                pathlist: vec![],
+                processed: false,
+                params: PotraceOptions {
+                    ..Default::default()
+                },
             },
         }
     }
 
     /// Sets algorithm parameters
-    pub fn setParameters(&mut self, newParams: PotraceOptions) -> &mut Self {
+    pub fn set_parameters(&mut self, newParams: PotraceOptions) {
         if newParams.color.is_some() || newParams.background.is_some() {
             self.processed = false
         }
         self.params = newParams;
-
-        return self;
-    }
-
-    /// Reads given image. Uses {@link Jimp} under the hood, so target can be whatever Jimp can take
-    pub fn loadImage(&mut self, base64: &str) -> &mut Self {
-        self.imageLoaded = false;
-        let slice = decode(base64).unwrap().as_slice();
-        let img = image::load_from_memory(slice).unwrap();
-        self.process_loaded_image(img);
-        self.imageLoaded = true;
-        return self;
-    }
-
-    fn process_loaded_image(&self, image: DynamicImage) {
-        let bitmap = Bitmap::new(image);
-        let pixels = bitmap.raw;
-
-        image.scan(0, 0, bitmap.width, bitmap.height, |i| {
-            // We want background underneath non-opaque regions to be white
-            let opacity = pixels[i + 3] / 255;
-            bitmap.data[i / 4] = luminance(
-                255 + (pixels[i + 0] - 255) * opacity,
-                255 + (pixels[i + 1] - 255) * opacity,
-                255 + (pixels[i + 2] - 255) * opacity,
-            )
-        });
-
-        self.luminanceData = Some(Box::new(bitmap));
-        self.imageLoaded = true
     }
 
     /// Returns <symbol> tag. Always has viewBox specified and comes with no fill color,
@@ -120,7 +82,7 @@ impl Potrace {
     pub fn get_symbol(&self, id: &str) -> String {
         let width = self.luminanceData.width;
         let height = self.luminanceData.height;
-        let path = self.get_path_tag();
+        let path = self.get_path_tag(None, None, None);
         return format!(
             "<symbol viewBox=\"0 0 {width} {height}\" id=\"{id}\">{path}</symbol>",
             width = width,
@@ -131,21 +93,25 @@ impl Potrace {
     }
 
     /// Generates SVG image
-    pub fn get_svg(&self) -> String {
-        let width = self.params.width || self.luminanceData.width;
-        let height = self.params.height || self.luminanceData.height;
+    pub fn get_svg(&mut self) -> String {
+        let width = match self.params.width.clone() {
+            Some(val) => *val,
+            None => self.luminanceData.width,
+        };
+        let height = match self.params.height.clone() {
+            Some(val) => *val,
+            None => self.luminanceData.height,
+        };
         let bg = self.get_bg();
         let path = self.get_path_tag(
-            self.params.color,
-            if self.params.width {
-                self.params.width / self.luminanceData.width
-            } else {
-                1
+            self.params.color.clone(),
+            match self.params.width.clone() {
+                Some(val) => Some(Box::new(*val / self.luminanceData.width)),
+                None => Some(Box::new(1)),
             },
-            if self.params.height {
-                self.params.height / self.luminanceData.height
-            } else {
-                1
+            match self.params.height.clone() {
+                Some(val) => Some(Box::new(*val / self.luminanceData.height)),
+                None => Some(Box::new(1)),
             },
         );
         return format!(
@@ -158,9 +124,9 @@ impl Potrace {
     }
 
     pub fn get_bg(&self) -> String {
-        let bg = self.background;
+        let bg = *self.params.background.clone().unwrap();
         if bg == COLOR_TRANSPARENT {
-            return "";
+            return "".to_string();
         } else {
             format!(
                 "<rect x=\"0\" y=\"0\" width=\"100%\" height=\"100%\" fill=\"{bg}\" />",
@@ -171,80 +137,83 @@ impl Potrace {
 
     /// Generates just <path> tag without rest of the SVG file
     pub fn get_path_tag(
-        &self,
+        &mut self,
         fillColor: Option<Box<String>>,
-        x: Option<Box<i32>>,
-        y: Option<Box<i32>>,
+        x: Option<Box<usize>>,
+        y: Option<Box<usize>>,
     ) -> String {
         let color = match fillColor {
             Some(val) => *val,
-            None => self.params.color,
+            None => *self.params.color.clone().unwrap(),
         };
         let fill = if color == COLOR_AUTO {
             if self.params.blackOnWhite {
-                "black"
+                "black".to_string()
             } else {
-                "white"
+                "white".to_string()
             }
         } else {
             color
         };
-
-        if !self.imageLoaded {
-            panic!("Image must be loaded first");
-        }
 
         if !self.processed {
             self.bmToPathlist();
             self.processPath();
             self.processed = true;
         }
-        let paths = self
-            .pathlist
-            .map(|path| path.curve.render_curve(x, y))
-            .join(" ");
+
+        let mut paths = Vec::with_capacity(self.pathlist.len());
+        let width = match x {
+            Some(val) => *val as f64,
+            None => 1f64,
+        };
+        let height = match y {
+            Some(val) => *val as f64,
+            None => 1f64,
+        };
+        for path in &self.pathlist {
+            paths.push(path.curve.render_curve(width, height))
+        }
         return format!(
             "<path d=\"{paths}\" stroke=\"none\" fill=\"{fill}\" fill-rule=\"evenodd\"/>",
-            paths = paths,
+            paths = paths.join(" "),
             fill = fill
         );
     }
 
     /// Creating a new {@link Path} for every group of black pixels.
-    fn bmToPathlist(&self) {
-        let threshold = if self.params.threshold == THRESHOLD_AUTO {
-            self.luminanceData.histogram().auto_threshold()
-        } else {
-            128
+    fn bmToPathlist(&mut self) {
+        let threshold = match self.params.threshold.clone() {
+            Some(_val) => *self
+                .luminanceData
+                .histogram
+                .auto_threshold(None, None)
+                .unwrap(),
+            None => vec![128u8],
         };
-        let blackOnWhite = self.params.blackOnWhite;
-        let blackMap = self.luminanceData.copy_with_cb(|lum| {
-            let pastTheThreshold = if blackOnWhite {
-                lum > threshold
-            } else {
-                lum < threshold
-            };
-            return if pastTheThreshold { 0 } else { 1 };
-        });
-        let mut currentPoint: Option<Box<Point>> = Some(Point::new(0, 0));
+        let blackOnWhite = self.params.blackOnWhite.clone();
+        let mut blackMap = self.luminanceData.generate_binary_bitmap(blackOnWhite, threshold[0]);
+        let mut currentPoint: Option<Box<Point>> = Some(Box::new(Point::new(0f64, 0f64)));
 
         // Clear path list
         self.pathlist = vec![];
 
-        while (currentPoint = blackMap.find_next(currentPoint)) {
-            let path = blackMap.find_path(currentPoint, self.params.turnPolicy);
+        while currentPoint.is_some() {
+            let point = *currentPoint.unwrap();
+            let path = blackMap.find_path(point, self.params.turnPolicy.clone());
             blackMap.xor_path(path);
 
-            if path.area > self.params.turdSize {
+            if path.area > self.params.turdSize as f64 {
                 self.pathlist.push(path)
             }
+            currentPoint = blackMap.find_next(point)
         }
     }
 
     /// Processes path list created by _bmToPathlist method creating and optimizing {@link Curve}'s
     fn processPath(&self) {
         for i in 0..self.pathlist.len() {
-            let mut path = self.pathlist[i];
+            let mut path = self.pathlist[i].clone();
             let mut curve = path.calc_sums().calc_lon().best_polygon().adjust_vertices();
             if path.sign == "-" {
                 curve.reverse()

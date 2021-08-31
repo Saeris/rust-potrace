@@ -26,9 +26,9 @@ This library was forked from [node-potrace](https://github.com/tooolbox/node-pot
 
 Prior art:
 
-[potrace]: http://potrace.sourceforge.net
-[potrace-algorithm]: http://potrace.sourceforge.net/potrace.pdf
-[potracejs]: https://github.com/kilobtye/potrace
+[potrace](http://potrace.sourceforge.net)
+[potrace-algorithm](http://potrace.sourceforge.net/potrace.pdf)
+[potracejs](https://github.com/kilobtye/potrace)
 
 ## 🥂 License
 
